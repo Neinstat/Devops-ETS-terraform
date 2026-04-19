@@ -1,0 +1,10 @@
+# Jangan di-upload karena berisi password/sub ID
+terraform.tfvars
+
+# Jangan di-upload karena folder ini hasil download sistem (berat)
+.terraform/
+.terraform.lock.hcl
+
+# File status infrastruktur (berisi data sensitif)
+terraform.tfstate
+terraform.tfstate.backup
