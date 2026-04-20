@@ -1,0 +1,40 @@
+datadir="/var/lib/proxysql"
+
+admin_variables=
+{
+    admin_credentials="{{ proxysql_admin_username }}:{{ proxysql_admin_password }}"
+    mysql_ifaces="0.0.0.0:{{ proxysql_admin_port }}"
+}
+
+mysql_variables=
+{
+    threads=4
+    max_connections=2048
+    default_query_delay=0
+    default_query_timeout=36000000
+    interfaces="0.0.0.0:{{ proxysql_query_port }}"
+    monitor_username="{{ proxysql_monitor_username }}"
+    monitor_password="{{ proxysql_monitor_password }}"
+}
+
+mysql_servers=
+(
+    { address="{{ proxysql_master_host }}", port=3306, hostgroup={{ proxysql_master_hostgroup }}, max_connections=100 },
+    # Keep the master in the read hostgroup with a tiny weight so reads fail over
+    # there only when the dedicated read replica is unavailable.
+    { address="{{ proxysql_master_host }}", port=3306, hostgroup={{ proxysql_slave_hostgroup }}, max_connections=100, weight=1 },
+    { address="{{ proxysql_slave_host }}", port=3306, hostgroup={{ proxysql_slave_hostgroup }}, max_connections=100, weight=1000 }
+)
+
+mysql_users=
+(
+    { username="{{ proxysql_app_username }}", password="{{ proxysql_app_password }}", default_hostgroup={{ proxysql_master_hostgroup }} }
+)
+
+mysql_query_rules=
+(
+    # SELECT ... FOR UPDATE must stay on master to avoid stale reads before writes.
+    { rule_id=1, active=1, match_pattern="^SELECT.*FOR UPDATE", destination_hostgroup={{ proxysql_master_hostgroup }}, apply=1 },
+    { rule_id=2, active=1, match_pattern="^SELECT", destination_hostgroup={{ proxysql_slave_hostgroup }}, apply=1 },
+    { rule_id=3, active=1, match_pattern=".*", destination_hostgroup={{ proxysql_master_hostgroup }}, apply=1 }
+)

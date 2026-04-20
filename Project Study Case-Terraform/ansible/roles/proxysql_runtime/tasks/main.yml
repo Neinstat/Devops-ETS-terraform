@@ -1,0 +1,78 @@
+---
+# Fail fast so runtime deploy only happens after the rendered ProxySQL config exists.
+- name: Verify Docker CLI is available on VM1
+  command: docker --version
+  changed_when: false
+
+- name: Ensure rendered ProxySQL config exists before building runtime image
+  stat:
+    path: "{{ proxysql_runtime_config_src }}"
+  register: proxysql_runtime_rendered_config
+
+- name: Stop when ProxySQL runtime deploy is attempted before config render
+  assert:
+    that:
+      - proxysql_runtime_rendered_config.stat.exists
+    fail_msg: "Run proxysql.yml first so {{ proxysql_runtime_config_src }} exists on VM1."
+
+- name: Ensure ProxySQL runtime build context directory exists
+  file:
+    path: "{{ proxysql_runtime_context_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Copy tracked ProxySQL Dockerfile into runtime build context
+  copy:
+    src: "{{ playbook_dir }}/../docker/proxysql/Dockerfile"
+    dest: "{{ proxysql_runtime_dockerfile_dest }}"
+    owner: root
+    group: root
+    mode: "0644"
+  register: proxysql_runtime_dockerfile
+
+- name: Copy rendered ProxySQL config into runtime build context
+  copy:
+    src: "{{ proxysql_runtime_config_src }}"
+    dest: "{{ proxysql_runtime_config_dest }}"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0644"
+  register: proxysql_runtime_config
+
+- name: Check whether the ProxySQL container already exists
+  shell: docker ps -a --filter "name=^{{ proxysql_runtime_container_name }}$" --format '{{'{{'}}.Names{{'}}'}}'
+  register: proxysql_runtime_container
+  changed_when: false
+
+- name: Build the ProxySQL runtime image from the managed build context
+  command: docker build -t {{ proxysql_runtime_image_name }} {{ proxysql_runtime_context_dir }}
+  when:
+    - proxysql_runtime_dockerfile.changed or proxysql_runtime_config.changed or proxysql_runtime_container.stdout != proxysql_runtime_container_name
+
+- name: Remove the existing ProxySQL container before recreation
+  command: docker rm -f {{ proxysql_runtime_container_name }}
+  when:
+    - proxysql_runtime_container.stdout == proxysql_runtime_container_name
+    - proxysql_runtime_dockerfile.changed or proxysql_runtime_config.changed
+
+- name: Run the ProxySQL container with the managed image
+  command: >
+    docker run -d --name {{ proxysql_runtime_container_name }}
+    --restart always
+    -p {{ proxysql_runtime_admin_port }}:{{ proxysql_runtime_admin_port }}
+    -p {{ proxysql_runtime_query_port }}:{{ proxysql_runtime_query_port }}
+    {{ proxysql_runtime_image_name }}
+  when:
+    - proxysql_runtime_dockerfile.changed or proxysql_runtime_config.changed or proxysql_runtime_container.stdout != proxysql_runtime_container_name
+
+- name: Confirm the managed ProxySQL container is running
+  shell: docker ps --filter "name=^{{ proxysql_runtime_container_name }}$" --format '{{'{{'}}.Names{{'}}'}} {{'{{'}}.Status{{'}}'}}'
+  register: proxysql_runtime_status
+  changed_when: false
+
+- name: Display ProxySQL runtime container status
+  debug:
+    var: proxysql_runtime_status.stdout

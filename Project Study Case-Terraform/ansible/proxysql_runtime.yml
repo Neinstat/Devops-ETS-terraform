@@ -1,0 +1,6 @@
+---
+- name: Deploy ProxySQL runtime container
+  hosts: app_proxy
+  become: yes
+  roles:
+    - role: proxysql_runtime

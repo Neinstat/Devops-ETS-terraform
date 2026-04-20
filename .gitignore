@@ -2,3 +2,5 @@
 .DS_Store
 *.pem
 *.log
+progress.md
+Project Study Case-Terraform/ansible/inventory.local.ini

@@ -1,0 +1,11 @@
+---
+proxysql_runtime_context_dir: "/opt/ecommerce/proxysql-runtime"
+proxysql_runtime_config_src: "/opt/ecommerce/proxysql/proxysql.cnf"
+proxysql_runtime_config_dest: "{{ proxysql_runtime_context_dir }}/proxysql.cnf"
+proxysql_runtime_dockerfile_dest: "{{ proxysql_runtime_context_dir }}/Dockerfile"
+
+proxysql_runtime_container_name: "ecommerce-proxysql"
+proxysql_runtime_image_name: "ecommerce-proxysql:latest"
+
+proxysql_runtime_admin_port: 6032
+proxysql_runtime_query_port: 6033

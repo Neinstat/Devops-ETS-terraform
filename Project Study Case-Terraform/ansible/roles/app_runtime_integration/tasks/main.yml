@@ -1,0 +1,48 @@
+---
+# Fail fast so the integration playbook does not recreate the app with incomplete DB settings.
+- name: Validate required app DB password
+  assert:
+    that:
+      - app_runtime_db_password | default('', true) | length > 0
+    fail_msg: "Set DB_APP_PASSWORD before running app_runtime_integration.yml."
+
+- name: Verify Docker CLI is available on VM1
+  command: docker --version
+  changed_when: false
+
+- name: Check whether the app image exists on VM1
+  shell: docker image inspect {{ app_runtime_image_name }} >/dev/null 2>&1
+  register: app_runtime_image
+  changed_when: false
+  failed_when: app_runtime_image.rc != 0
+
+- name: Check whether the app container already exists
+  shell: docker ps -a --filter "name=^{{ app_runtime_container_name }}$" --format '{{'{{'}}.Names{{'}}'}}'
+  register: app_runtime_container
+  changed_when: false
+
+- name: Remove the existing app container before recreation
+  command: docker rm -f {{ app_runtime_container_name }}
+  when:
+    - app_runtime_container.stdout == app_runtime_container_name
+
+- name: Run the app container with managed DB integration environment
+  command: >
+    docker run -d --name {{ app_runtime_container_name }}
+    --restart always
+    -p {{ app_runtime_host_port }}:{{ app_runtime_container_port }}
+    -e DB_HOST={{ app_runtime_db_host }}
+    -e DB_PORT={{ app_runtime_db_port }}
+    -e DB_USER={{ app_runtime_db_user }}
+    -e DB_PASSWORD={{ app_runtime_db_password }}
+    -e DB_NAME={{ app_runtime_db_name }}
+    {{ app_runtime_image_name }}
+
+- name: Confirm the managed app container is running
+  shell: docker ps --filter "name=^{{ app_runtime_container_name }}$" --format '{{'{{'}}.Names{{'}}'}} {{'{{'}}.Status{{'}}'}}'
+  register: app_runtime_status
+  changed_when: false
+
+- name: Display app runtime container status
+  debug:
+    var: app_runtime_status.stdout

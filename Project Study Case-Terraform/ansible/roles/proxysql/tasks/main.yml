@@ -1,0 +1,31 @@
+---
+- name: Validate required ProxySQL secrets
+  assert:
+    that:
+      - proxysql_admin_password | default('', true) | length > 0
+      - proxysql_monitor_password | default('', true) | length > 0
+      - proxysql_app_password | default('', true) | length > 0
+    fail_msg: "Set PROXYSQL_ADMIN_PASSWORD, DB_MONITOR_PASSWORD, and DB_APP_PASSWORD before running proxysql.yml."
+
+- name: Ensure ProxySQL config directory exists
+  file:
+    path: "{{ proxysql_config_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Render ProxySQL config
+  template:
+    src: proxysql.cnf.j2
+    dest: "{{ proxysql_config_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Display app connection contract for integration
+  debug:
+    msg:
+      - "ProxySQL query port is {{ proxysql_query_port }} on VM1."
+      - "App must not use 127.0.0.1 when it runs in a different container."
+      - "Expected app credentials: user={{ proxysql_app_username }}, database=ecommerce."

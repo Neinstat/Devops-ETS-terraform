@@ -1,0 +1,6 @@
+---
+- name: Render ProxySQL configuration
+  hosts: app_proxy
+  become: yes
+  roles:
+    - role: proxysql

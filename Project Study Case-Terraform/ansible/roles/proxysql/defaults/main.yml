@@ -1,0 +1,20 @@
+---
+proxysql_admin_username: "kelompok2admin"
+proxysql_admin_password: "{{ lookup('env', 'PROXYSQL_ADMIN_PASSWORD') }}"
+
+proxysql_monitor_username: "proxysql_monitor"
+proxysql_monitor_password: "{{ lookup('env', 'DB_MONITOR_PASSWORD') }}"
+
+proxysql_app_username: "app_user"
+proxysql_app_password: "{{ lookup('env', 'DB_APP_PASSWORD') }}"
+
+proxysql_master_host: "10.0.1.20"
+proxysql_slave_host: "10.0.1.21"
+
+proxysql_master_hostgroup: 0
+proxysql_slave_hostgroup: 1
+
+proxysql_admin_port: 6032
+proxysql_query_port: 6033
+proxysql_config_dir: "/opt/ecommerce/proxysql"
+proxysql_config_path: "{{ proxysql_config_dir }}/proxysql.cnf"
