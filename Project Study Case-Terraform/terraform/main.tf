@@ -1,28 +1,34 @@
-# main.tf
+# main.tf — ARSITEKTUR BARU: 3 VM
 # ============================================================
-# File utama infrastruktur. Urutan pembuatan resource:
-# 1. Resource Group (folder pembungkus)
-# 2. Virtual Network + Subnet (jaringan virtual)
-# 3. Network Security Group (firewall rules)
-# 4. Public IP (hanya untuk App Node)
-# 5. Network Interface (kartu jaringan virtual tiap VM)
-# 6. 5 Virtual Machine
+# VM 1 (vm-app-proxy): App Node + ProxySQL digabung
+#   IP Privat : 10.0.1.10
+#   IP Publik : Ya (agar bisa diakses dari luar untuk demo)
+#
+# VM 2 (vm-master-db): Master Database
+#   IP Privat : 10.0.1.20
+#   IP Publik : Tidak (hanya diakses dari dalam VNet)
+#
+# VM 3 (vm-slave-db): Slave Database
+#   IP Privat : 10.0.1.21
+#   IP Publik : Tidak
+#
+# Total core: 3 VM x 2 core = 6 core (pas dengan limit student)
 # ============================================================
 
 
 # ── 1. RESOURCE GROUP ────────────────────────────────────────
-# Resource Group = "folder" di Azure yang menampung semua resource.
-# Memudahkan pengelolaan dan penghapusan (hapus RG = hapus semua isinya).
+# Wadah pembungkus semua resource Azure di project ini.
+# Menghapus Resource Group = menghapus SEMUA isinya sekaligus.
 resource "azurerm_resource_group" "main" {
   name     = var.resource_group_name
   location = var.location
 }
 
 
-# ── 2. VIRTUAL NETWORK (VNet) ────────────────────────────────
-# VNet = jaringan virtual privat di Azure.
-# Semua VM akan berada di dalam VNet ini → terisolasi dari internet.
-# 10.0.0.0/16 = range IP privat yang tersedia: 10.0.0.0 – 10.0.255.255
+# ── 2. VIRTUAL NETWORK ───────────────────────────────────────
+# Jaringan privat virtual di Azure.
+# Semua VM berada di dalam sini dan bisa saling komunikasi
+# menggunakan IP privat tanpa lewat internet.
 resource "azurerm_virtual_network" "main" {
   name                = "devops-vnet"
   address_space       = ["10.0.0.0/16"]
@@ -32,9 +38,8 @@ resource "azurerm_virtual_network" "main" {
 
 
 # ── 3. SUBNET ────────────────────────────────────────────────
-# Subnet = pembagian ruang IP di dalam VNet.
-# Kita pakai 1 subnet untuk semua VM agar semua bisa saling berkomunikasi.
-# 10.0.1.0/24 = range: 10.0.1.0 – 10.0.1.255 (254 IP tersedia)
+# Sub-pembagian ruang IP dalam VNet.
+# /24 artinya tersedia 254 IP: 10.0.1.1 sampai 10.0.1.254
 resource "azurerm_subnet" "main" {
   name                 = "devops-subnet"
   resource_group_name  = azurerm_resource_group.main.name
@@ -43,32 +48,31 @@ resource "azurerm_subnet" "main" {
 }
 
 
-# ── 4. NETWORK SECURITY GROUP (NSG) ──────────────────────────
-# NSG = firewall di Azure. Mengontrol traffic masuk dan keluar.
-# Kita buat aturan: hanya traffic tertentu yang diizinkan antar node.
+# ── 4. NETWORK SECURITY GROUP (Firewall) ─────────────────────
+# Aturan firewall yang berlaku untuk semua VM dalam subnet.
+# Prinsip: izinkan yang perlu, blokir sisanya.
 resource "azurerm_network_security_group" "main" {
   name                = "devops-nsg"
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
 
-  # ── Aturan 1: SSH dari luar (untuk admin/kamu login ke VM) ──
-  # Port 22 = port standar SSH
-  # Hanya izinkan dari IP laptop kamu saja (lebih aman)
-  # Untuk development, kita buka dari mana saja dulu (*)
+  # ── Rule 1: SSH dari luar (untuk kamu login ke VM) ──────────
+  # Port 22 adalah port standar SSH.
+  # Semua anggota tim butuh SSH ke VM masing-masing.
   security_rule {
     name                       = "Allow-SSH"
-    priority                   = 100        # Angka kecil = prioritas lebih tinggi
-    direction                  = "Inbound"  # Traffic masuk
+    priority                   = 100
+    direction                  = "Inbound"
     access                     = "Allow"
     protocol                   = "Tcp"
     source_port_range          = "*"
     destination_port_range     = "22"
-    source_address_prefix      = "*"        # Biarkan * agar bisa diakses semua orang/tim
+    source_address_prefix      = "*"
     destination_address_prefix = "*"
   }
 
-  # ── Aturan 2: HTTP dari internet ke App Node ──
-  # Port 80 = HTTP, untuk akses aplikasi web
+  # ── Rule 2: HTTP ke App Node (port 80) ──────────────────────
+  # Agar user/tester bisa mengakses aplikasi dari browser.
   security_rule {
     name                       = "Allow-HTTP"
     priority                   = 110
@@ -81,9 +85,24 @@ resource "azurerm_network_security_group" "main" {
     destination_address_prefix = "*"
   }
 
-  # ── Aturan 3: MySQL antar node dalam VNet ──
-  # Port 3306 = MySQL/MariaDB
-  # Hanya dari dalam VNet (10.0.0.0/16), bukan dari internet
+  # ── Rule 3: HTTPS ke App Node (port 443) ────────────────────
+  # Winda (Security) akan setup SSL, jadi port 443 perlu dibuka.
+  security_rule {
+    name                       = "Allow-HTTPS"
+    priority                   = 115
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "443"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+
+  # ── Rule 4: MySQL antar node (port 3306) ─────────────────────
+  # App → ProxySQL → DB menggunakan port 3306 (MySQL).
+  # Dibatasi hanya dari dalam VNet (10.0.0.0/16) saja,
+  # tidak bisa diakses langsung dari internet.
   security_rule {
     name                       = "Allow-MySQL-Internal"
     priority                   = 120
@@ -92,11 +111,14 @@ resource "azurerm_network_security_group" "main" {
     protocol                   = "Tcp"
     source_port_range          = "*"
     destination_port_range     = "3306"
-    source_address_prefix      = "10.0.0.0/16"  # Hanya dari dalam VNet
+    source_address_prefix      = "10.0.0.0/16"
     destination_address_prefix = "*"
   }
 
-  # ── Aturan 4: ProxySQL port (6032 = admin, 6033 = query) ──
+  # ── Rule 5: ProxySQL admin & query port ──────────────────────
+  # Port 6032 = admin interface ProxySQL (untuk Kepin konfigurasi)
+  # Port 6033 = port query yang dipakai App untuk kirim SQL ke ProxySQL
+  # Keduanya hanya dari dalam VNet.
   security_rule {
     name                       = "Allow-ProxySQL-Internal"
     priority                   = 130
@@ -109,10 +131,12 @@ resource "azurerm_network_security_group" "main" {
     destination_address_prefix = "*"
   }
 
-  # ── Aturan 5: Blokir semua traffic lain dari internet ──
+  # ── Rule 6: Blokir semua traffic lain dari internet ──────────
+  # Priority 4000 = dijalankan paling terakhir.
+  # Semua yang tidak cocok dengan rule di atas akan diblokir di sini.
   security_rule {
     name                       = "Deny-All-Inbound"
-    priority                   = 4000       # Prioritas terendah = dijalankan terakhir
+    priority                   = 4000
     direction                  = "Inbound"
     access                     = "Deny"
     protocol                   = "*"
@@ -123,140 +147,85 @@ resource "azurerm_network_security_group" "main" {
   }
 }
 
-# Hubungkan NSG ke Subnet (terapkan firewall ke semua VM di subnet)
+# Terapkan NSG ke Subnet — semua VM dalam subnet otomatis kena aturan ini
 resource "azurerm_subnet_network_security_group_association" "main" {
   subnet_id                 = azurerm_subnet.main.id
   network_security_group_id = azurerm_network_security_group.main.id
 }
 
 
-# ── 5. PUBLIC IP (hanya untuk App Node) ──────────────────────
-# Hanya App Node yang punya IP publik — supaya user bisa akses aplikasi.
-# Node lain (ProxySQL, DB) tidak punya IP publik = lebih aman.
-resource "azurerm_public_ip" "app" {
-  name                = "app-public-ip"
+# ── 5. PUBLIC IP ─────────────────────────────────────────────
+# Hanya VM 1 (App+ProxySQL) yang punya IP publik.
+# VM 2 dan VM 3 (database) tidak punya IP publik —
+# ini penting untuk keamanan, database tidak boleh diakses langsung dari internet.
+resource "azurerm_public_ip" "app_proxy" {
+  name                = "app-proxy-public-ip"
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
-  allocation_method   = "Static"   # IP tidak berubah-ubah
+  allocation_method   = "Static"   # IP tidak berubah walau VM direstart
   sku                 = "Standard"
 }
 
 
 # ── 6. NETWORK INTERFACES (NIC) ──────────────────────────────
-# NIC = kartu jaringan virtual. Setiap VM butuh 1 NIC.
-# NIC menghubungkan VM ke Subnet dan memberikan IP privat.
+# Setiap VM butuh 1 NIC (kartu jaringan virtual).
+# NIC = penghubung antara VM dan Subnet, sekaligus tempat assign IP.
 
-# NIC untuk App Node (dengan IP publik)
-resource "azurerm_network_interface" "app" {
-  name                = "app-nic"
+# NIC VM 1 — App + ProxySQL (punya IP publik)
+resource "azurerm_network_interface" "app_proxy" {
+  name                = "app-proxy-nic"
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
 
   ip_configuration {
-    name                          = "app-ip-config"
+    name                          = "app-proxy-ipconfig"
     subnet_id                     = azurerm_subnet.main.id
     private_ip_address_allocation = "Static"
-    private_ip_address            = "10.0.1.10"   # IP privat tetap untuk App Node
-    public_ip_address_id          = azurerm_public_ip.app.id
+    private_ip_address            = "10.0.1.10"
+    public_ip_address_id          = azurerm_public_ip.app_proxy.id
   }
 }
 
-# NIC untuk ProxySQL Node (hanya IP privat)
-resource "azurerm_network_interface" "proxysql" {
-  name                = "proxysql-nic"
-  location            = azurerm_resource_group.main.location
-  resource_group_name = azurerm_resource_group.main.name
-
-  ip_configuration {
-    name                          = "proxysql-ip-config"
-    subnet_id                     = azurerm_subnet.main.id
-    private_ip_address_allocation = "Static"
-    private_ip_address            = "10.0.1.20"   # IP privat tetap untuk ProxySQL
-  }
-}
-
-# NIC untuk Master DB Node
+# NIC VM 2 — Master DB (hanya IP privat)
 resource "azurerm_network_interface" "master_db" {
   name                = "master-db-nic"
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
 
   ip_configuration {
-    name                          = "master-db-ip-config"
+    name                          = "master-db-ipconfig"
     subnet_id                     = azurerm_subnet.main.id
     private_ip_address_allocation = "Static"
-    private_ip_address            = "10.0.1.30"   # IP privat untuk Master DB
+    private_ip_address            = "10.0.1.20"
   }
 }
 
-# NIC untuk Slave DB 1
-resource "azurerm_network_interface" "slave_db1" {
-  name                = "slave-db1-nic"
+# NIC VM 3 — Slave DB (hanya IP privat)
+resource "azurerm_network_interface" "slave_db" {
+  name                = "slave-db-nic"
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
 
   ip_configuration {
-    name                          = "slave-db1-ip-config"
+    name                          = "slave-db-ipconfig"
     subnet_id                     = azurerm_subnet.main.id
     private_ip_address_allocation = "Static"
-    private_ip_address            = "10.0.1.31"
-  }
-}
-
-# NIC untuk Slave DB 2
-resource "azurerm_network_interface" "slave_db2" {
-  name                = "slave-db2-nic"
-  location            = azurerm_resource_group.main.location
-  resource_group_name = azurerm_resource_group.main.name
-
-  ip_configuration {
-    name                          = "slave-db2-ip-config"
-    subnet_id                     = azurerm_subnet.main.id
-    private_ip_address_allocation = "Static"
-    private_ip_address            = "10.0.1.32"
+    private_ip_address            = "10.0.1.21"
   }
 }
 
 
 # ── 7. VIRTUAL MACHINES ───────────────────────────────────────
-# Sekarang buat 5 VM. Semuanya pakai Ubuntu 22.04 LTS.
+# Tiga VM dengan Ubuntu 22.04 LTS.
+# Semua pakai Standard_B2s (2 core) → total 6 core = pas limit student.
 
-# ── VM 1: App Node ──
-resource "azurerm_linux_virtual_machine" "app" {
-  name                            = "vm-app-node"
-  resource_group_name             = azurerm_resource_group.main.name
-  location                        = azurerm_resource_group.main.location
-  size                            = var.vm_size
-  admin_username                  = var.admin_username
-  admin_password                  = var.admin_password
-  disable_password_authentication = false  # Izinkan login pakai password
-
-  # Hubungkan VM ke NIC yang sudah dibuat
-  network_interface_ids = [azurerm_network_interface.app.id]
-
-  # Spesifikasi OS Disk (storage untuk OS)
-  os_disk {
-    caching              = "ReadWrite"
-    storage_account_type = "Standard_LRS"  # HDD standar, lebih murah
-  }
-
-  # Image OS yang dipakai: Ubuntu 22.04 LTS
-  source_image_reference {
-    publisher = "Canonical"
-    offer     = "0001-com-ubuntu-server-jammy"
-    sku       = "22_04-lts-gen2"
-    version   = "latest"
-  }
-
-  tags = {
-    role = "app-node"
-    project = "devops-ecommerce"
-  }
-}
-
-# ── VM 2: ProxySQL Node ──
-resource "azurerm_linux_virtual_machine" "proxysql" {
-  name                            = "vm-proxysql-node"
+# ── VM 1: App Node + ProxySQL (DIGABUNG) ─────────────────────
+# VM ini akan menjalankan:
+#   - Aplikasi web (Frontend + Backend) dalam Docker container
+#   - ProxySQL untuk routing query read/write ke database
+# Nopi akan setup Docker di sini, Kepin akan setup ProxySQL di sini.
+resource "azurerm_linux_virtual_machine" "app_proxy" {
+  name                            = "vm-app-proxy"
   resource_group_name             = azurerm_resource_group.main.name
   location                        = azurerm_resource_group.main.location
   size                            = var.vm_size
@@ -264,27 +233,35 @@ resource "azurerm_linux_virtual_machine" "proxysql" {
   admin_password                  = var.admin_password
   disable_password_authentication = false
 
-  network_interface_ids = [azurerm_network_interface.proxysql.id]
+  network_interface_ids = [azurerm_network_interface.app_proxy.id]
 
   os_disk {
+    name                 = "app-proxy-osdisk"
     caching              = "ReadWrite"
     storage_account_type = "Standard_LRS"
+    # 50GB — lebih besar karena akan menyimpan Docker images
+    disk_size_gb         = 50
   }
 
-  source_image_reference {
-    publisher = "Canonical"
-    offer     = "0001-com-ubuntu-server-jammy"
-    sku       = "22_04-lts-gen2"
-    version   = "latest"
-  }
+# BARU — ARM64, kompatibel dengan Standard_B2ps_v2
+source_image_reference {
+  publisher = "Canonical"
+  offer     = "0001-com-ubuntu-server-jammy"
+  sku       = "22_04-lts-arm64"
+  version   = "latest"
+}
 
   tags = {
-    role = "proxysql-node"
-    project = "devops-ecommerce"
+    role        = "app-proxysql"
+    project     = "devops-ecommerce"
+    penanggung  = "Nopi-dan-Kepin"
   }
 }
 
-# ── VM 3: Master DB Node ──
+# ── VM 2: Master Database ─────────────────────────────────────
+# VM ini akan menjalankan MySQL/MariaDB sebagai Master.
+# Semua operasi WRITE (INSERT, UPDATE, DELETE) diarahkan ke sini.
+# Tarisa (Database Master) akan konfigurasi VM ini.
 resource "azurerm_linux_virtual_machine" "master_db" {
   name                            = "vm-master-db"
   resource_group_name             = azurerm_resource_group.main.name
@@ -297,26 +274,35 @@ resource "azurerm_linux_virtual_machine" "master_db" {
   network_interface_ids = [azurerm_network_interface.master_db.id]
 
   os_disk {
+    name                 = "master-db-osdisk"
     caching              = "ReadWrite"
     storage_account_type = "Standard_LRS"
+    # 50GB untuk data database
+    disk_size_gb         = 50
   }
 
-  source_image_reference {
-    publisher = "Canonical"
-    offer     = "0001-com-ubuntu-server-jammy"
-    sku       = "22_04-lts-gen2"
-    version   = "latest"
-  }
+# BARU — ARM64, kompatibel dengan Standard_B2ps_v2
+source_image_reference {
+  publisher = "Canonical"
+  offer     = "0001-com-ubuntu-server-jammy"
+  sku       = "22_04-lts-arm64"
+  version   = "latest"
+}
 
   tags = {
-    role = "master-db"
-    project = "devops-ecommerce"
+    role       = "master-db"
+    project    = "devops-ecommerce"
+    penanggung = "Tarisa"
   }
 }
 
-# ── VM 4: Slave DB 1 ──
-resource "azurerm_linux_virtual_machine" "slave_db1" {
-  name                            = "vm-slave-db1"
+# ── VM 3: Slave Database ──────────────────────────────────────
+# VM ini menjalankan MySQL/MariaDB sebagai Slave.
+# Data dari Master otomatis direplikasi ke sini.
+# Semua operasi READ (SELECT) diarahkan ke sini oleh ProxySQL.
+# Dave (Slave DB) akan konfigurasi VM ini.
+resource "azurerm_linux_virtual_machine" "slave_db" {
+  name                            = "vm-slave-db"
   resource_group_name             = azurerm_resource_group.main.name
   location                        = azurerm_resource_group.main.location
   size                            = var.vm_size
@@ -324,52 +310,26 @@ resource "azurerm_linux_virtual_machine" "slave_db1" {
   admin_password                  = var.admin_password
   disable_password_authentication = false
 
-  network_interface_ids = [azurerm_network_interface.slave_db1.id]
+  network_interface_ids = [azurerm_network_interface.slave_db.id]
 
   os_disk {
+    name                 = "slave-db-osdisk"
     caching              = "ReadWrite"
     storage_account_type = "Standard_LRS"
+    disk_size_gb         = 50
   }
 
-  source_image_reference {
-    publisher = "Canonical"
-    offer     = "0001-com-ubuntu-server-jammy"
-    sku       = "22_04-lts-gen2"
-    version   = "latest"
-  }
-
-  tags = {
-    role = "slave-db-1"
-    project = "devops-ecommerce"
-  }
+# BARU — ARM64, kompatibel dengan Standard_B2ps_v2
+source_image_reference {
+  publisher = "Canonical"
+  offer     = "0001-com-ubuntu-server-jammy"
+  sku       = "22_04-lts-arm64"
+  version   = "latest"
 }
 
-# ── VM 5: Slave DB 2 ──
-resource "azurerm_linux_virtual_machine" "slave_db2" {
-  name                            = "vm-slave-db2"
-  resource_group_name             = azurerm_resource_group.main.name
-  location                        = azurerm_resource_group.main.location
-  size                            = var.vm_size
-  admin_username                  = var.admin_username
-  admin_password                  = var.admin_password
-  disable_password_authentication = false
-
-  network_interface_ids = [azurerm_network_interface.slave_db2.id]
-
-  os_disk {
-    caching              = "ReadWrite"
-    storage_account_type = "Standard_LRS"
-  }
-
-  source_image_reference {
-    publisher = "Canonical"
-    offer     = "0001-com-ubuntu-server-jammy"
-    sku       = "22_04-lts-gen2"
-    version   = "latest"
-  }
-
   tags = {
-    role = "slave-db-2"
-    project = "devops-ecommerce"
+    role       = "slave-db"
+    project    = "devops-ecommerce"
+    penanggung = "Dave"
   }
 }
