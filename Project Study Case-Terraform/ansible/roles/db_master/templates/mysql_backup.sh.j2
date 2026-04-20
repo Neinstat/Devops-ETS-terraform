@@ -1,0 +1,14 @@
+#!/bin/bash
+BACKUP_DIR="{{ mysql_backup_dir }}"
+DATE=$(date +"%Y%m%d_%H%M%S")
+RETENTION_DAYS={{ mysql_retention_days }}
+
+mkdir -p "$BACKUP_DIR"
+mysqldump --user=backup_user --password={{ mysql_backup_password }} \
+  --all-databases --single-transaction --flush-logs --master-data=2 \
+  --routines --triggers | gzip > "$BACKUP_DIR/full_backup_$DATE.sql.gz"
+
+[ $? -eq 0 ] && echo "$(date): OK" >> /var/log/mysql_backup.log \
+             || echo "$(date): GAGAL!" >> /var/log/mysql_backup.log
+
+find "$BACKUP_DIR" -name "*.sql.gz" -mtime +$RETENTION_DAYS -delete

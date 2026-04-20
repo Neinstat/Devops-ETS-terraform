@@ -1,0 +1,11 @@
+---
+# defaults/main.yml for db_master
+
+mysql_root_password: "{{ lookup('env', 'DB_ROOT_PASSWORD') }}"
+mysql_repl_password: "{{ lookup('env', 'DB_REPL_PASSWORD') }}"
+mysql_monitor_password: "{{ lookup('env', 'DB_MONITOR_PASSWORD') }}"
+mysql_app_password: "{{ lookup('env', 'DB_APP_PASSWORD') }}"
+mysql_backup_password: "{{ lookup('env', 'DB_BACKUP_PASSWORD') }}"
+
+mysql_backup_dir: "/var/backups/mysql"
+mysql_retention_days: 7

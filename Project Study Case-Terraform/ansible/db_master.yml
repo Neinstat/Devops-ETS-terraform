@@ -1,0 +1,8 @@
+---
+# db_master.yml
+
+- name: Setup MariaDB Master
+  hosts: master
+  become: yes
+  roles:
+    - role: db_master

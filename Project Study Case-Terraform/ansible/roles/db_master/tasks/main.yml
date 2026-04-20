@@ -1,0 +1,122 @@
+---
+# tasks/main.yml for db_master
+
+- name: Install MariaDB and required packages
+  apt:
+    name: 
+      - mariadb-server
+      - mariadb-client
+      - python3-pymysql
+    state: present
+    update_cache: yes
+
+- name: Ensure MariaDB log directory exists
+  file:
+    path: /var/log/mysql
+    state: directory
+    owner: mysql
+    group: mysql
+    mode: '0750'
+  notify: restart mariadb
+
+- name: Copy MariaDB configuration file
+  template:
+    src: my.cnf.j2
+    dest: /etc/mysql/mariadb.conf.d/50-server.cnf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: restart mariadb
+
+- name: Flush handlers to restart MariaDB before continuing
+  meta: flush_handlers
+
+- name: Ensure MariaDB service is running and enabled
+  service:
+    name: mariadb
+    state: started
+    enabled: yes
+
+- name: Set root password and configure root user
+  mysql_user:
+    name: root
+    password: "{{ mysql_root_password }}"
+    host: localhost
+    state: present
+    login_user: root
+    login_password: "{{ mysql_root_password }}"
+    login_unix_socket: /var/run/mysqld/mysqld.sock
+    check_implicit_admin: yes
+
+- name: Create replication user for slave
+  mysql_user:
+    login_user: root
+    login_password: "{{ mysql_root_password }}"
+    name: repl_user
+    password: "{{ mysql_repl_password }}"
+    host: "10.0.1.21"
+    priv: '*.*:REPLICATION SLAVE'
+    state: present
+
+- name: Create ProxySQL monitor user
+  mysql_user:
+    login_user: root
+    login_password: "{{ mysql_root_password }}"
+    name: proxysql_monitor
+    password: "{{ mysql_monitor_password }}"
+    host: "10.0.1.10"
+    priv: '*.*:USAGE'
+    state: present
+
+- name: Create app database
+  mysql_db:
+    login_user: root
+    login_password: "{{ mysql_root_password }}"
+    name: ecommerce
+    state: present
+
+- name: Create app user (least privilege)
+  mysql_user:
+    login_user: root
+    login_password: "{{ mysql_root_password }}"
+    name: app_user
+    password: "{{ mysql_app_password }}"
+    host: "10.0.1.10"
+    priv: 'ecommerce.*:SELECT,INSERT,UPDATE,DELETE'
+    state: present
+
+- name: Create backup user
+  mysql_user:
+    login_user: root
+    login_password: "{{ mysql_root_password }}"
+    name: backup_user
+    password: "{{ mysql_backup_password }}"
+    host: localhost
+    priv: '*.*:SELECT,LOCK TABLES,SHOW VIEW,RELOAD,REPLICATION CLIENT'
+    state: present
+
+- name: Deploy backup script
+  template:
+    src: mysql_backup.sh.j2
+    dest: /usr/local/bin/mysql_backup.sh
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Setup cron job for backup script
+  cron:
+    name: "MySQL Daily Backup"
+    minute: "0"
+    hour: "2"
+    job: "/usr/local/bin/mysql_backup.sh"
+
+- name: Fetch master status and show it for slave setup
+  mysql_query:
+    login_user: root
+    login_password: "{{ mysql_root_password }}"
+    query: "SHOW MASTER STATUS"
+  register: master_status_query
+
+- name: Display Master Status (File and Position)
+  debug:
+    msg: "MASTER_LOG_FILE: {{ master_status_query.query_result[0][0].File | default('N/A') }}, MASTER_LOG_POS: {{ master_status_query.query_result[0][0].Position | default('N/A') }}"

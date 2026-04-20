@@ -1,0 +1,7 @@
+---
+# handlers/main.yml for db_master
+
+- name: restart mariadb
+  service:
+    name: mariadb
+    state: restarted
