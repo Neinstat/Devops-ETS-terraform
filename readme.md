@@ -1,7 +1,7 @@
 # DevOps Project ETS Study Case #2
 
-> **Kelompok:** 2 
-> **Anggota Kelompok:** 
+**Kelompok: 2**   
+**Anggota Kelompok:** 
 > 1. Muhammad Andrean Rizq Prasetio | 5027231052
 > 2. Kevin Anugrah Faza | NRP
 > 3. Nama | NRP
