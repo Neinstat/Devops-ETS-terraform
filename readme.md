@@ -2,13 +2,16 @@
 
 **Kelompok: 2**   
 **Anggota Kelompok:** 
-> 1. Muhammad Andrean Rizq Prasetio | 5027231052
-> 2. Kevin Anugrah Faza | NRP
-> 3. Nama | NRP
-> 4.
-> 5.
-> 6.
-> 7.  Tulis nama nrp ges
+| No | Nama | NRP |
+| :--- | :---- | :--- |
+| 1 | Muhammad Andrean Rizq Prasetio | 5027231052 |
+| 2 | Nama | NRP |
+| 3 | Nama | NRP |
+| 4 | Nama | NRP |
+| 5 | Nama | NRP |
+| 6 | Nama | NRP |
+| 7 | Nama | NRP |
+
 
 ---
 
