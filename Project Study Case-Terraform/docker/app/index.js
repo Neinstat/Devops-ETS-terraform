@@ -12,46 +12,140 @@ const dbConfig = {
   database: process.env.DB_NAME || 'ecommerce_kel2',
 };
 
-// Halaman utama UI
 app.get('/', (req, res) => {
   res.send(`
     <!DOCTYPE html>
     <html>
     <head>
-      <title>E-Commerce Kelompok 2</title>
+      <title>ShopKel2 — E-Commerce</title>
       <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: Arial, sans-serif; background: #f0f2f5; }
-        .header { background: #2d3e50; color: white; padding: 20px 40px; }
-        .header h1 { font-size: 24px; }
-        .header p { font-size: 13px; opacity: 0.7; margin-top: 4px; }
-        .container { max-width: 900px; margin: 30px auto; padding: 0 20px; }
-        .card { background: white; border-radius: 8px; padding: 24px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
-        .card h2 { font-size: 18px; margin-bottom: 16px; color: #2d3e50; }
-        .status-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
-        .status-item { background: #f8f9fa; border-radius: 6px; padding: 16px; text-align: center; }
-        .status-item .label { font-size: 12px; color: #888; margin-bottom: 6px; }
-        .status-item .value { font-size: 20px; font-weight: bold; color: #2d3e50; }
-        .btn { background: #2d3e50; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-size: 14px; }
-        .btn:hover { background: #3d5166; }
-        table { width: 100%; border-collapse: collapse; }
-        th { background: #f8f9fa; padding: 10px 12px; text-align: left; font-size: 13px; color: #555; }
-        td { padding: 10px 12px; border-top: 1px solid #f0f0f0; font-size: 14px; }
-        .badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 12px; }
-        .badge-ok { background: #e6f4ea; color: #2d7a3a; }
-        .badge-err { background: #fce8e6; color: #c62828; }
-        #result { margin-top: 12px; font-size: 13px; color: #555; }
+        body { font-family: 'Segoe UI', Arial, sans-serif; background: #f4f6fb; color: #222; }
+        
+        .header {
+          background: linear-gradient(135deg, #1a1a2e 0%, #16213e 60%, #0f3460 100%);
+          color: white;
+          padding: 28px 48px;
+          display: flex;
+          align-items: center;
+          gap: 18px;
+          box-shadow: 0 4px 24px rgba(0,0,0,0.18);
+        }
+        .header-logo {
+          font-size: 42px;
+        }
+        .header-text h1 {
+          font-size: 28px;
+          font-weight: 700;
+          letter-spacing: 0.5px;
+        }
+        .header-text p {
+          font-size: 13px;
+          opacity: 0.6;
+          margin-top: 3px;
+          letter-spacing: 1px;
+          text-transform: uppercase;
+        }
+
+        .container { max-width: 960px; margin: 36px auto; padding: 0 24px; }
+
+        .card {
+          background: white;
+          border-radius: 14px;
+          padding: 28px;
+          margin-bottom: 24px;
+          box-shadow: 0 2px 16px rgba(0,0,0,0.07);
+        }
+        .card h2 {
+          font-size: 17px;
+          font-weight: 700;
+          margin-bottom: 20px;
+          color: #1a1a2e;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+
+        .status-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+        .status-item {
+          background: #f8f9fb;
+          border-radius: 10px;
+          padding: 18px;
+          text-align: center;
+          border: 1px solid #eef0f5;
+        }
+        .status-item .label { font-size: 12px; color: #999; margin-bottom: 8px; letter-spacing: 0.5px; text-transform: uppercase; }
+        .status-item .dot { font-size: 28px; }
+        .status-item .val { font-size: 13px; font-weight: 600; margin-top: 6px; color: #444; }
+
+        .btn {
+          background: linear-gradient(135deg, #0f3460, #16213e);
+          color: white;
+          border: none;
+          padding: 10px 22px;
+          border-radius: 8px;
+          cursor: pointer;
+          font-size: 14px;
+          font-weight: 600;
+          letter-spacing: 0.3px;
+          transition: opacity 0.2s;
+        }
+        .btn:hover { opacity: 0.85; }
+
+        table { width: 100%; border-collapse: collapse; margin-top: 16px; }
+        th {
+          background: #f4f6fb;
+          padding: 11px 14px;
+          text-align: left;
+          font-size: 12px;
+          color: #888;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          font-weight: 600;
+        }
+        td { padding: 11px 14px; border-top: 1px solid #f0f2f7; font-size: 14px; }
+        tr:hover td { background: #fafbff; }
+
         .form-row { display: flex; gap: 10px; flex-wrap: wrap; }
-        .form-row input { flex: 1; min-width: 140px; padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; }
-        .infra { font-size: 13px; color: #555; line-height: 1.8; }
-        .infra span { font-weight: bold; color: #2d3e50; }
+        .form-row input {
+          flex: 1;
+          min-width: 140px;
+          padding: 10px 14px;
+          border: 1.5px solid #e8eaf0;
+          border-radius: 8px;
+          font-size: 14px;
+          outline: none;
+          transition: border 0.2s;
+        }
+        .form-row input:focus { border-color: #0f3460; }
+
+        #result { margin-top: 14px; font-size: 13px; }
+
+        .infra {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 10px;
+        }
+        .infra-item {
+          background: #f8f9fb;
+          border-radius: 8px;
+          padding: 13px 16px;
+          font-size: 13px;
+          color: #555;
+          border: 1px solid #eef0f5;
+        }
+        .infra-item strong { color: #1a1a2e; display: block; margin-bottom: 3px; }
       </style>
     </head>
     <body>
       <div class="header">
-        <h1>🛒 E-Commerce App — Kelompok 2</h1>
-        <p>DevOps Mini Project · Institut Teknologi Sepuluh Nopember</p>
+        <div class="header-logo">🛒</div>
+        <div class="header-text">
+          <h1>ShopKel2</h1>
+          <p>E-Commerce · DevOps Mini Project · Kelompok 2</p>
+        </div>
       </div>
+
       <div class="container">
 
         <div class="card">
@@ -59,18 +153,18 @@ app.get('/', (req, res) => {
           <div class="status-grid">
             <div class="status-item">
               <div class="label">App Server</div>
-              <div class="value">🟢</div>
-              <div class="label" style="margin-top:4px">Running</div>
+              <div class="dot">🟢</div>
+              <div class="val">Running</div>
             </div>
             <div class="status-item">
               <div class="label">ProxySQL</div>
-              <div class="value">🟢</div>
-              <div class="label" style="margin-top:4px">Port 6033</div>
+              <div class="dot">🟢</div>
+              <div class="val">Port 6033</div>
             </div>
             <div class="status-item">
               <div class="label">DB Connection</div>
-              <div class="value" id="dbStatus">⏳</div>
-              <div class="label" style="margin-top:4px" id="dbLabel">Checking...</div>
+              <div class="dot" id="dbStatus">⏳</div>
+              <div class="val" id="dbLabel">Checking...</div>
             </div>
           </div>
         </div>
@@ -78,10 +172,12 @@ app.get('/', (req, res) => {
         <div class="card">
           <h2>📦 Products</h2>
           <button class="btn" onclick="loadProducts()">Load Products</button>
-          <div style="margin-top:16px; overflow-x:auto;">
+          <div style="overflow-x:auto">
             <table id="productTable">
               <thead><tr><th>ID</th><th>Name</th><th>Price</th><th>Stock</th></tr></thead>
-              <tbody id="productBody"><tr><td colspan="4" style="color:#aaa;text-align:center;padding:20px">Click "Load Products" to fetch data</td></tr></tbody>
+              <tbody id="productBody">
+                <tr><td colspan="4" style="color:#bbb;text-align:center;padding:24px">Click "Load Products" to fetch data</td></tr>
+              </tbody>
             </table>
           </div>
         </div>
@@ -90,7 +186,7 @@ app.get('/', (req, res) => {
           <h2>➕ Add Product</h2>
           <div class="form-row">
             <input id="pName" placeholder="Product name" />
-            <input id="pPrice" placeholder="Price" type="number" />
+            <input id="pPrice" placeholder="Price (Rp)" type="number" />
             <input id="pStock" placeholder="Stock" type="number" />
             <button class="btn" onclick="addProduct()">Add</button>
           </div>
@@ -100,16 +196,28 @@ app.get('/', (req, res) => {
         <div class="card">
           <h2>🏗️ Infrastructure</h2>
           <div class="infra">
-            <div>🖥️ <span>VM1 (App + ProxySQL)</span> — 10.0.1.10 | Public: 4.193.169.181</div>
-            <div>🗄️ <span>VM2 (Master DB)</span> — 10.0.1.20 | Write traffic</div>
-            <div>🗄️ <span>VM3 (Slave DB)</span> — 10.0.1.21 | Read traffic</div>
-            <div>🐳 <span>Containerized</span> — Docker + Docker Scout security scan</div>
+            <div class="infra-item">
+              <strong>🖥️ VM1 — App + ProxySQL</strong>
+              10.0.1.10 · Public: 4.193.169.181
+            </div>
+            <div class="infra-item">
+              <strong>🗄️ VM2 — Master DB</strong>
+              10.0.1.20 · Write traffic
+            </div>
+            <div class="infra-item">
+              <strong>🗄️ VM3 — Slave DB</strong>
+              10.0.1.21 · Read traffic
+            </div>
+            <div class="infra-item">
+              <strong>🐳 Containerized</strong>
+              Docker · Docker Scout security scan
+            </div>
           </div>
         </div>
 
       </div>
+
       <script>
-        // Check DB status on load
         fetch('/health').then(r=>r.json()).then(d=>{
           document.getElementById('dbStatus').innerText = d.db === 'ok' ? '🟢' : '🔴';
           document.getElementById('dbLabel').innerText = d.db === 'ok' ? 'Connected' : 'Error';
@@ -122,10 +230,10 @@ app.get('/', (req, res) => {
           fetch('/products').then(r=>r.json()).then(d=>{
             const tbody = document.getElementById('productBody');
             if (!d.data || d.data.length === 0) {
-              tbody.innerHTML = '<tr><td colspan="4" style="color:#aaa;text-align:center;padding:20px">No products found</td></tr>';
+              tbody.innerHTML = '<tr><td colspan="4" style="color:#bbb;text-align:center;padding:24px">No products found</td></tr>';
               return;
             }
-            tbody.innerHTML = d.data.map(p => 
+            tbody.innerHTML = d.data.map(p =>
               '<tr><td>'+p.id+'</td><td>'+p.name+'</td><td>Rp '+Number(p.price).toLocaleString('id-ID')+'</td><td>'+p.stock+'</td></tr>'
             ).join('');
           });
@@ -140,9 +248,9 @@ app.get('/', (req, res) => {
             headers: {'Content-Type':'application/json'},
             body: JSON.stringify({name, price, stock})
           }).then(r=>r.json()).then(d=>{
-            document.getElementById('result').innerHTML = d.success 
-              ? '<span style="color:green">✅ Product added! ID: '+d.insertedId+'</span>'
-              : '<span style="color:red">❌ Error: '+d.error+'</span>';
+            document.getElementById('result').innerHTML = d.success
+              ? '<span style="color:#2d7a3a">✅ Product added! ID: '+d.insertedId+'</span>'
+              : '<span style="color:#c62828">❌ Error: '+d.error+'</span>';
             if (d.success) loadProducts();
           });
         }
@@ -152,7 +260,6 @@ app.get('/', (req, res) => {
   `);
 });
 
-// Health check endpoint
 app.get('/health', async (req, res) => {
   try {
     const conn = await mysql.createConnection(dbConfig);
@@ -164,7 +271,6 @@ app.get('/health', async (req, res) => {
   }
 });
 
-// GET semua produk
 app.get('/products', async (req, res) => {
   try {
     const conn = await mysql.createConnection(dbConfig);
@@ -176,7 +282,6 @@ app.get('/products', async (req, res) => {
   }
 });
 
-// POST tambah produk
 app.post('/products', async (req, res) => {
   const { name, price, stock } = req.body;
   try {
@@ -194,5 +299,5 @@ app.post('/products', async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`App Kelompok 2 running on port ${PORT}`);
+  console.log(`ShopKel2 running on port ${PORT}`);
 });
