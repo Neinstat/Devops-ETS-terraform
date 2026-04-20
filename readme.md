@@ -5,12 +5,12 @@
 | No | Nama | NRP |
 | :--- | :---- | :--- |
 | 1 | Muhammad Andrean Rizq Prasetio | 5027231052 |
-| 2 | Nama | NRP |
-| 3 | Nama | NRP |
-| 4 | Nama | NRP |
-| 5 | Nama | NRP |
-| 6 | Nama | NRP |
-| 7 | Nama | NRP |
+| 2 | Aswalia Novitriasari | 5027231012 |
+| 3 | Harwinda | 5027231079 |
+| 4 | Adlya Isriena Aftarisya | 5027231066 |
+| 5 | Kevin Anugerah Faza | 5027231027 |
+| 6 | Angella Christie | 5027221047 |
+| 7 | George David Nebore | 5027221043 |
 
 
 ---
