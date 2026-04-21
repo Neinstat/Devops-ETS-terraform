@@ -1,0 +1,158 @@
+---
+# tls_master_proxysql.yml
+# Playbook untuk mengaktifkan TLS HANYA di Master dan ProxySQL (Slave di-skip)
+# Versi ini tidak membutuhkan file template eksternal.
+
+- name: 1. Generate TLS Certificates Locally (Hanya Master)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Pastikan direktori certs lokal tersedia
+      file:
+        path: "{{ playbook_dir }}/certs"
+        state: directory
+        mode: '0755'
+
+    - name: Periksa apakah CA lokal sudah ada
+      stat:
+        path: "{{ playbook_dir }}/certs/ca.pem"
+      register: ca_cert_stat
+
+    - name: Generate CA Key & CA Cert
+      shell: |
+        openssl genrsa -out ca-key.pem 4096
+        openssl req -new -x509 -nodes -days 3650 \
+          -key ca-key.pem -out ca.pem \
+          -subj "/C=ID/ST=Jawa Timur/O=DevOps/CN=DevOps-Kelompok2-CA"
+      args:
+        chdir: "{{ playbook_dir }}/certs"
+      when: not ca_cert_stat.stat.exists
+
+    - name: Periksa apakah sertifikat Master sudah ada
+      stat:
+        path: "{{ playbook_dir }}/certs/master-cert.pem"
+      register: master_cert_stat
+
+    - name: Generate Certificates untuk Master
+      shell: |
+        openssl genrsa -out master-key.pem 2048
+        openssl req -new -key master-key.pem -out master.csr \
+          -subj "/C=ID/ST=Jawa Timur/O=DevOps/CN=vm-master-db"
+        openssl x509 -req -in master.csr -CA ca.pem -CAkey ca-key.pem \
+          -CAcreateserial -out master-cert.pem -days 3650
+      args:
+        chdir: "{{ playbook_dir }}/certs"
+      when: not master_cert_stat.stat.exists
+
+
+- name: 2. Implementasi TLS di Database Master
+  hosts: master
+  become: yes
+  tasks:
+    - name: Buat direktori TLS di Master
+      file:
+        path: /etc/mysql/tls
+        state: directory
+        owner: mysql
+        group: mysql
+        mode: "0750"
+
+    - name: Copy sertifikat TLS ke Master
+      copy:
+        src: "{{ playbook_dir }}/certs/{{ item.src }}"
+        dest: "/etc/mysql/tls/{{ item.dest }}"
+        owner: mysql
+        group: mysql
+        mode: "{{ item.mode }}"
+      loop:
+        - { src: 'ca.pem', dest: 'ca.pem', mode: '0644' }
+        - { src: 'master-cert.pem', dest: 'server-cert.pem', mode: '0644' }
+        - { src: 'master-key.pem', dest: 'server-key.pem', mode: '0600' }
+
+    - name: Timpa konfigurasi MariaDB Master (Tulis Langsung, Tanpa Template)
+      copy:
+        dest: /etc/mysql/mariadb.conf.d/50-server.cnf
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          [mysqld]
+          server-id               = 1
+          bind-address            = 0.0.0.0
+          log_bin                 = /var/log/mysql/mysql-bin.log
+          binlog_format           = ROW
+          expire_logs_days        = 7
+          max_binlog_size         = 100M
+          innodb_buffer_pool_size = 512M
+
+          # TLS Configuration
+          ssl-ca = /etc/mysql/tls/ca.pem
+          ssl-cert = /etc/mysql/tls/server-cert.pem
+          ssl-key = /etc/mysql/tls/server-key.pem
+          tls_version = TLSv1.2,TLSv1.3
+
+          # require_secure_transport = ON  # Dimatikan agar Slave tetap bisa konek (plaintext)
+
+    - name: Restart MariaDB di Master
+      service:
+        name: mariadb
+        state: restarted
+
+
+- name: 3. Implementasi TLS di ProxySQL (Konek SSL HANYA ke Master)
+  hosts: app_proxy
+  become: yes
+  tasks:
+    - name: Render konfigurasi ProxySQL Custom (use_ssl=1 HANYA untuk Master 10.0.1.20)
+      copy:
+        dest: /opt/ecommerce/proxysql/proxysql.cnf
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          datadir="/var/lib/proxysql"
+
+          admin_variables=
+          {
+              admin_credentials="kelompok2admin:{{ lookup('env', 'PROXYSQL_ADMIN_PASSWORD') }}"
+              mysql_ifaces="0.0.0.0:6032"
+          }
+
+          mysql_variables=
+          {
+              threads=4
+              max_connections=2048
+              default_query_delay=0
+              default_query_timeout=36000000
+              interfaces="0.0.0.0:6033"
+              monitor_username="proxysql_monitor"
+              monitor_password="{{ lookup('env', 'DB_MONITOR_PASSWORD') }}"
+          }
+
+          mysql_servers=
+          (
+              { address="10.0.1.20", port=3306, hostgroup=0, max_connections=100, use_ssl=1 },
+              { address="10.0.1.20", port=3306, hostgroup=1, max_connections=100, weight=1, use_ssl=1 },
+              { address="10.0.1.21", port=3306, hostgroup=1, max_connections=100, weight=1000 }
+          )
+
+          mysql_users=
+          (
+              { username="app_user", password="{{ lookup('env', 'DB_APP_PASSWORD') }}", default_hostgroup=0 }
+          )
+
+          mysql_query_rules=
+          (
+              { rule_id=1, active=1, match_pattern="^SELECT.*FOR UPDATE", destination_hostgroup=0, apply=1 },
+              { rule_id=2, active=1, match_pattern="^SELECT", destination_hostgroup=1, apply=1 },
+              { rule_id=3, active=1, match_pattern=".*", destination_hostgroup=0, apply=1 }
+          )
+
+    - name: Terapkan konfigurasi dengan me-rebuild Docker Image ProxySQL
+      include_role:
+        name: proxysql_runtime
+
+    - name: Restart App container agar memutus sisa koneksi idle lama
+      command: docker restart ecommerce-app
+      ignore_errors: true
