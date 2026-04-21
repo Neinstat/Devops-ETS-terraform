@@ -4,7 +4,7 @@ app_runtime_image_name: "ecommerce-app:latest"
 app_runtime_host_port: 80
 app_runtime_container_port: 3000
 
-# Use VM1 private IP so the app container reaches the ProxySQL port exposed on the host.
+# Gunakan IP privat VM1 agar container app mencapai port ProxySQL yang diekspos di host.
 app_runtime_db_host: "10.0.1.10"
 app_runtime_db_port: "6033"
 app_runtime_db_user: "app_user"

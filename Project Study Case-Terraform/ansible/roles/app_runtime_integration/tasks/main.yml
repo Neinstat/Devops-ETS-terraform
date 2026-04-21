@@ -1,32 +1,32 @@
 ---
-# Fail fast so the integration playbook does not recreate the app with incomplete DB settings.
-- name: Validate required app DB password
+# Gagalkan lebih awal agar playbook tidak membuat ulang app dengan konfigurasi DB yang tidak lengkap.
+- name: Validasi password DB app
   assert:
     that:
       - app_runtime_db_password | default('', true) | length > 0
-    fail_msg: "Set DB_APP_PASSWORD before running app_runtime_integration.yml."
+    fail_msg: "Isi DB_APP_PASSWORD sebelum menjalankan app_runtime_integration.yml."
 
-- name: Verify Docker CLI is available on VM1
+- name: Pastikan Docker CLI tersedia di VM1
   command: docker --version
   changed_when: false
 
-- name: Check whether the app image exists on VM1
+- name: Cek apakah image app ada di VM1
   shell: docker image inspect {{ app_runtime_image_name }} >/dev/null 2>&1
   register: app_runtime_image
   changed_when: false
   failed_when: app_runtime_image.rc != 0
 
-- name: Check whether the app container already exists
+- name: Cek apakah container app sudah ada
   shell: docker ps -a --filter "name=^{{ app_runtime_container_name }}$" --format '{{'{{'}}.Names{{'}}'}}'
   register: app_runtime_container
   changed_when: false
 
-- name: Remove the existing app container before recreation
+- name: Hapus container app lama sebelum dibuat ulang
   command: docker rm -f {{ app_runtime_container_name }}
   when:
     - app_runtime_container.stdout == app_runtime_container_name
 
-- name: Run the app container with managed DB integration environment
+- name: Jalankan container app dengan environment integrasi DB terkelola
   command: >
     docker run -d --name {{ app_runtime_container_name }}
     --restart always
@@ -38,11 +38,11 @@
     -e DB_NAME={{ app_runtime_db_name }}
     {{ app_runtime_image_name }}
 
-- name: Confirm the managed app container is running
+- name: Pastikan container app terkelola sedang berjalan
   shell: docker ps --filter "name=^{{ app_runtime_container_name }}$" --format '{{'{{'}}.Names{{'}}'}} {{'{{'}}.Status{{'}}'}}'
   register: app_runtime_status
   changed_when: false
 
-- name: Display app runtime container status
+- name: Tampilkan status container app
   debug:
     var: app_runtime_status.stdout

@@ -1,5 +1,5 @@
 ---
-- name: Deploy ProxySQL runtime container
+- name: Deploy container runtime ProxySQL
   hosts: app_proxy
   become: yes
   roles:

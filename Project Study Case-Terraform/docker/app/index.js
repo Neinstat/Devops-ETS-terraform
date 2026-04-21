@@ -7,9 +7,9 @@ app.use(express.json());
 const dbConfig = {
   host: process.env.DB_HOST || '127.0.0.1',
   port: parseInt(process.env.DB_PORT) || 6033,
-  user: process.env.DB_USER || 'kelompok2user',
-  password: process.env.DB_PASSWORD || 'Kelompok2devops!',
-  database: process.env.DB_NAME || 'ecommerce_kel2',
+  user: process.env.DB_USER || 'app_user',
+  password: process.env.DB_PASSWORD || 'app_password',
+  database: process.env.DB_NAME || 'ecommerce',
 };
 
 app.get('/', (req, res) => {

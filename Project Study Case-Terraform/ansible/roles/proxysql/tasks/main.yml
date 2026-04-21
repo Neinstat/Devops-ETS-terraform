@@ -1,13 +1,13 @@
 ---
-- name: Validate required ProxySQL secrets
+- name: Validasi secret ProxySQL yang wajib
   assert:
     that:
       - proxysql_admin_password | default('', true) | length > 0
       - proxysql_monitor_password | default('', true) | length > 0
       - proxysql_app_password | default('', true) | length > 0
-    fail_msg: "Set PROXYSQL_ADMIN_PASSWORD, DB_MONITOR_PASSWORD, and DB_APP_PASSWORD before running proxysql.yml."
+    fail_msg: "Isi PROXYSQL_ADMIN_PASSWORD, DB_MONITOR_PASSWORD, dan DB_APP_PASSWORD sebelum menjalankan proxysql.yml."
 
-- name: Ensure ProxySQL config directory exists
+- name: Pastikan direktori konfigurasi ProxySQL ada
   file:
     path: "{{ proxysql_config_dir }}"
     state: directory
@@ -15,7 +15,7 @@
     group: root
     mode: "0755"
 
-- name: Render ProxySQL config
+- name: Render konfigurasi ProxySQL
   template:
     src: proxysql.cnf.j2
     dest: "{{ proxysql_config_path }}"
@@ -23,9 +23,9 @@
     group: root
     mode: "0644"
 
-- name: Display app connection contract for integration
+- name: Tampilkan kontrak koneksi app untuk integrasi
   debug:
     msg:
-      - "ProxySQL query port is {{ proxysql_query_port }} on VM1."
-      - "App must not use 127.0.0.1 when it runs in a different container."
-      - "Expected app credentials: user={{ proxysql_app_username }}, database=ecommerce."
+      - "Port query ProxySQL adalah {{ proxysql_query_port }} di VM1."
+      - "App tidak boleh menggunakan 127.0.0.1 jika berjalan di container yang berbeda."
+      - "Kredensial app yang diharapkan: user={{ proxysql_app_username }}, database=ecommerce."

@@ -1,0 +1,15 @@
+---
+app_schema_database_name: "ecommerce"
+app_schema_products_table_name: "products"
+
+# Data seed awal untuk tabel products.
+app_schema_seed_products:
+  - name: "Keyboard Mechanical"
+    price: "799000.00"
+    stock: 12
+  - name: "Mouse Wireless"
+    price: "299000.00"
+    stock: 24
+  - name: "USB-C Hub"
+    price: "459000.00"
+    stock: 8

@@ -1,0 +1,6 @@
+---
+- name: Inisialisasi schema aplikasi
+  hosts: master
+  become: yes
+  roles:
+    - role: app_schema

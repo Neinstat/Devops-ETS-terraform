@@ -1,6 +1,6 @@
 ---
-# Integration-only runtime deployment for the existing ecommerce app container.
-- name: Deploy app runtime DB integration
+# Deployment runtime ini hanya menyentuh integrasi database pada container app yang sudah ada.
+- name: Deploy integrasi DB untuk runtime app
   hosts: app_proxy
   become: yes
   roles:

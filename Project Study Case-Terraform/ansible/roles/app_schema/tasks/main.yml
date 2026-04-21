@@ -1,0 +1,67 @@
+---
+# Gagalkan lebih awal agar inisialisasi schema tidak berjalan tanpa password root DB.
+- name: Validasi password root database
+  assert:
+    that:
+      - lookup('env', 'DB_ROOT_PASSWORD') | default('', true) | length > 0
+    fail_msg: "Isi DB_ROOT_PASSWORD sebelum menjalankan app_schema.yml."
+
+- name: Pastikan database aplikasi ada
+  mysql_db:
+    login_user: root
+    login_password: "{{ lookup('env', 'DB_ROOT_PASSWORD') }}"
+    name: "{{ app_schema_database_name }}"
+    state: present
+
+# App hanya membaca dan menulis id, name, price, dan stock, jadi struktur tabel dibuat tetap ramping.
+- name: Pastikan tabel products ada
+  mysql_query:
+    login_user: root
+    login_password: "{{ lookup('env', 'DB_ROOT_PASSWORD') }}"
+    login_db: "{{ app_schema_database_name }}"
+    query:
+      - >
+        CREATE TABLE IF NOT EXISTS {{ app_schema_products_table_name }} (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          name VARCHAR(255) NOT NULL,
+          price DECIMAL(12,2) NOT NULL,
+          stock INT NOT NULL DEFAULT 0,
+          created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        )
+
+- name: Cek apakah tabel products sudah berisi data
+  mysql_query:
+    login_user: root
+    login_password: "{{ lookup('env', 'DB_ROOT_PASSWORD') }}"
+    login_db: "{{ app_schema_database_name }}"
+    query: "SELECT COUNT(*) AS product_count FROM {{ app_schema_products_table_name }}"
+  register: app_schema_products_count
+
+# Seed hanya dijalankan saat tabel masih kosong agar rerun tetap deterministik dan tidak menduplikasi data.
+- name: Seed data awal ke tabel products
+  mysql_query:
+    login_user: root
+    login_password: "{{ lookup('env', 'DB_ROOT_PASSWORD') }}"
+    login_db: "{{ app_schema_database_name }}"
+    query:
+      - >
+        INSERT INTO {{ app_schema_products_table_name }} (name, price, stock)
+        VALUES ('{{ item.name }}', {{ item.price }}, {{ item.stock }})
+  loop: "{{ app_schema_seed_products }}"
+  when: app_schema_products_count.query_result[0][0].product_count | int == 0
+
+- name: Cek jumlah baris products setelah seed opsional
+  mysql_query:
+    login_user: root
+    login_password: "{{ lookup('env', 'DB_ROOT_PASSWORD') }}"
+    login_db: "{{ app_schema_database_name }}"
+    query: "SELECT COUNT(*) AS product_count FROM {{ app_schema_products_table_name }}"
+  register: app_schema_products_count_after_seed
+
+- name: Tampilkan jumlah baris products setelah inisialisasi schema
+  debug:
+    msg: >-
+      Tabel {{ app_schema_database_name }}.{{ app_schema_products_table_name }}
+      saat ini memiliki {{ app_schema_products_count_after_seed.query_result[0][0].product_count | int }}
+      baris.
