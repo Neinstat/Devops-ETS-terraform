@@ -10,6 +10,7 @@ const dbConfig = {
   user: process.env.DB_USER || 'app_user',
   password: process.env.DB_PASSWORD || 'app_password',
   database: process.env.DB_NAME || 'ecommerce',
+  ssl: { rejectUnauthorized: false }
 };
 
 app.get('/', (req, res) => {
