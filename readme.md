@@ -203,3 +203,33 @@ terraform output
 ```
 
 ---
+
+## 7. Hasil Pengujian 
+
+### Pengujian Koneksi ProxySQL
+Koneksi ke database melalui ProxySQL (port 6033) berhasil dilakukan menggunakan user aplikasi.
+```bash
+mysql -u app_user -p -h 127.0.0.1 -P 6033
+```
+
+### Pengujian Keamanan 
+Percobaan untuk membuat database baru ditolak oleh sistem:
+
+<img width="1593" height="210" alt="image" src="https://github.com/user-attachments/assets/21454568-453c-45ef-bf3f-43e21935cf4d" />
+
+Menunjukkan bahwa user hanya memiliki akses terbatas sesuai prinsip least privilege.
+
+### Pengujian Write Data
+Data berhasil ditambahkan ke database melalui ProxySQL:
+
+<img width="1971" height="680" alt="image" src="https://github.com/user-attachments/assets/7669610b-bd17-4ca6-89fb-934c5b0cc0f9" />
+
+### Validasi Data di Master Database
+Data berhasil tersimpan di node master:
+
+<img width="1574" height="1130" alt="image" src="https://github.com/user-attachments/assets/6524287e-27de-492a-bf91-04eb335df0bb" />
+
+### Validasi Replikasi ke Slave Database
+Data yang sama muncul di node slave tanpa dilakukan input manual:
+
+<img width="1509" height="1073" alt="Screenshot 2026-04-21 235521" src="https://github.com/user-attachments/assets/88b4fafa-6b82-4171-9cec-4663355c69b3" />
