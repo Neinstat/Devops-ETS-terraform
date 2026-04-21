@@ -1,0 +1,234 @@
+---
+# Gagalkan lebih awal agar setup slave tidak berjalan dengan password kosong.
+- name: Validasi password database yang wajib
+  assert:
+    that:
+      - db_slave_root_password | default('', true) | length > 0
+      - db_slave_repl_password | default('', true) | length > 0
+      - db_slave_monitor_password | default('', true) | length > 0
+      - db_slave_app_password | default('', true) | length > 0
+    fail_msg: "Isi DB_ROOT_PASSWORD, DB_REPL_PASSWORD, DB_MONITOR_PASSWORD, dan DB_APP_PASSWORD sebelum menjalankan db_slave.yml."
+
+- name: Install MariaDB dan dependensi yang dibutuhkan
+  apt:
+    name:
+      - mariadb-server
+      - mariadb-client
+      - python3-pymysql
+    state: present
+    update_cache: yes
+
+- name: Pastikan direktori log MariaDB ada
+  file:
+    path: "{{ db_slave_log_dir }}"
+    state: directory
+    owner: mysql
+    group: mysql
+    mode: "0750"
+  notify: restart mariadb
+
+# Templat ini menghindari konflik bind-address ganda yang sempat membuat slave hanya listen di localhost.
+- name: Salin konfigurasi MariaDB slave
+  template:
+    src: my.cnf.j2
+    dest: "{{ db_slave_config_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: restart mariadb
+
+- name: Restart MariaDB sebelum konfigurasi lanjutan
+  meta: flush_handlers
+
+- name: Pastikan service MariaDB berjalan
+  service:
+    name: mariadb
+    state: started
+    enabled: yes
+
+- name: Set password root MariaDB lokal
+  block:
+    # Gunakan login berbasis password saat root sudah pernah dikonfigurasi.
+    - name: Set password root MariaDB lokal dengan login password
+      mysql_user:
+        name: root
+        password: "{{ db_slave_root_password }}"
+        host: localhost
+        state: present
+        login_user: root
+        login_password: "{{ db_slave_root_password }}"
+  rescue:
+    # Fallback ini dipakai pada run pertama saat root masih bisa masuk lewat unix socket.
+    - name: Set password root MariaDB lokal dengan login socket
+      mysql_user:
+        name: root
+        password: "{{ db_slave_root_password }}"
+        host: localhost
+        state: present
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        check_implicit_admin: yes
+
+# Cek status lebih dulu agar rerun playbook tidak selalu reseed slave yang sebenarnya sudah sehat.
+- name: Ambil status replikasi slave sebelum bootstrap
+  shell: mariadb -u root -p'{{ db_slave_root_password }}' -e "SHOW SLAVE STATUS\\G"
+  args:
+    executable: /bin/bash
+  register: db_slave_status_before
+  changed_when: false
+  failed_when: false
+
+- name: Cek apakah tabel aplikasi sudah ada di slave
+  shell: >
+    mariadb -u root -p'{{ db_slave_root_password }}' -Nse
+    "SELECT COUNT(*)
+    FROM information_schema.tables
+    WHERE table_schema='{{ db_slave_database_name }}'
+    AND table_name='{{ db_slave_app_table_name }}';"
+  args:
+    executable: /bin/bash
+  register: db_slave_table_check
+  changed_when: false
+  failed_when: false
+
+- name: Tentukan apakah slave perlu bootstrap ulang
+  set_fact:
+    db_slave_replication_healthy: >-
+      {{ 'Slave_IO_Running: Yes' in db_slave_status_before.stdout
+         and 'Slave_SQL_Running: Yes' in db_slave_status_before.stdout }}
+
+- name: Tandai apakah schema aplikasi slave sudah siap
+  set_fact:
+    db_slave_schema_ready: "{{ db_slave_table_check.stdout | default('0') | trim == '1' }}"
+
+- name: Putuskan apakah slave perlu bootstrap ulang
+  set_fact:
+    db_slave_needs_bootstrap: "{{ not db_slave_replication_healthy or not db_slave_schema_ready }}"
+
+- name: Buat dump database aplikasi dari master
+  command: >
+    mysqldump
+    -u root
+    -p{{ db_slave_root_password }}
+    --single-transaction
+    --master-data=2
+    --databases {{ db_slave_database_name }}
+    --result-file={{ db_slave_dump_path }}
+  delegate_to: "{{ groups['master'][0] }}"
+  when: db_slave_needs_bootstrap
+
+- name: Ambil informasi file dan posisi binlog dari dump
+  shell: >
+    grep -m1 "CHANGE MASTER TO" {{ db_slave_dump_path }}
+    | sed -E "s/.*MASTER_LOG_FILE='([^']+)'.*MASTER_LOG_POS=([0-9]+).*/\\1 \\2/"
+  delegate_to: "{{ groups['master'][0] }}"
+  register: db_slave_dump_master_log
+  changed_when: false
+  when: db_slave_needs_bootstrap
+
+- name: Baca isi dump dari master
+  slurp:
+    src: "{{ db_slave_dump_path }}"
+  delegate_to: "{{ groups['master'][0] }}"
+  register: db_slave_dump_content
+  when: db_slave_needs_bootstrap
+
+- name: Salin dump master ke slave
+  copy:
+    content: "{{ db_slave_dump_content.content | b64decode }}"
+    dest: "{{ db_slave_dump_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when: db_slave_needs_bootstrap
+
+- name: Hentikan dan reset status replikasi lama
+  shell: |
+    # Root di slave sudah memakai password, jadi semua perintah administrasi mariadb harus login eksplisit.
+    mariadb -u root -p'{{ db_slave_root_password }}' -e "STOP SLAVE; RESET SLAVE;"
+  args:
+    executable: /bin/bash
+  when: db_slave_needs_bootstrap
+
+- name: Import dump master ke slave
+  shell: mariadb -u root -p'{{ db_slave_root_password }}' < {{ db_slave_dump_path }}
+  args:
+    executable: /bin/bash
+  when: db_slave_needs_bootstrap
+
+- name: Buat user monitor di slave
+  mysql_user:
+    # Setelah root dikunci dengan password, grant user juga harus login dengan kredensial yang sama.
+    login_user: root
+    login_password: "{{ db_slave_root_password }}"
+    name: "{{ db_slave_monitor_user }}"
+    password: "{{ db_slave_monitor_password }}"
+    host: "{{ item }}"
+    priv: "*.*:USAGE"
+    state: present
+  loop: "{{ db_slave_allowed_hosts }}"
+
+- name: Buat user aplikasi di slave
+  mysql_user:
+    # Hindari fallback implicit admin yang sebelumnya selalu gagal pada rerun playbook.
+    login_user: root
+    login_password: "{{ db_slave_root_password }}"
+    name: "{{ db_slave_app_user }}"
+    password: "{{ db_slave_app_password }}"
+    host: "{{ item }}"
+    priv: "{{ db_slave_database_name }}.*:SELECT,INSERT,UPDATE,DELETE"
+    state: present
+  loop: "{{ db_slave_allowed_hosts }}"
+
+- name: Baca status read_only slave saat ini
+  shell: mariadb -u root -p'{{ db_slave_root_password }}' -Nse "SELECT @@global.read_only;"
+  args:
+    executable: /bin/bash
+  register: db_slave_read_only_status
+  changed_when: false
+
+- name: Pastikan slave berjalan read-only
+  shell: mariadb -u root -p'{{ db_slave_root_password }}' -e "SET GLOBAL read_only = 1;"
+  args:
+    executable: /bin/bash
+  when: db_slave_read_only_status.stdout | trim != '1'
+
+- name: Sambungkan slave ke master dan jalankan replikasi
+  shell: >
+    mariadb -u root -p'{{ db_slave_root_password }}' -e "CHANGE MASTER TO
+    MASTER_HOST='{{ db_slave_master_host }}',
+    MASTER_USER='{{ db_slave_repl_user }}',
+    MASTER_PASSWORD='{{ db_slave_repl_password }}',
+    MASTER_PORT={{ db_slave_master_port }},
+    MASTER_LOG_FILE='{{ db_slave_dump_master_log.stdout.split()[0] }}',
+    MASTER_LOG_POS={{ db_slave_dump_master_log.stdout.split()[1] }};
+    START SLAVE;"
+  args:
+    executable: /bin/bash
+  when: db_slave_needs_bootstrap
+
+- name: Hapus dump bootstrap di slave setelah import
+  file:
+    path: "{{ db_slave_dump_path }}"
+    state: absent
+  when: db_slave_needs_bootstrap
+
+- name: Hapus dump bootstrap di master setelah sinkronisasi
+  file:
+    path: "{{ db_slave_dump_path }}"
+    state: absent
+  delegate_to: "{{ groups['master'][0] }}"
+  when: db_slave_needs_bootstrap
+
+- name: Ambil status replikasi slave
+  shell: mariadb -u root -p'{{ db_slave_root_password }}' -e "SHOW SLAVE STATUS\\G"
+  args:
+    executable: /bin/bash
+  register: db_slave_status
+  changed_when: false
+  failed_when:
+    - "'Slave_IO_Running: Yes' not in db_slave_status.stdout"
+    - "'Slave_SQL_Running: Yes' not in db_slave_status.stdout"
+
+- name: Tampilkan ringkasan status replikasi slave
+  debug:
+    var: db_slave_status.stdout

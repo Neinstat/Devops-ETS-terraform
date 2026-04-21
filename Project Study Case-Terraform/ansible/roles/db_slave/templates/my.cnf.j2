@@ -1,0 +1,12 @@
+[mysqld]
+server-id               = {{ db_slave_server_id }}
+bind-address            = {{ db_slave_bind_address }}
+relay-log               = {{ db_slave_log_dir }}/relay-bin
+log_bin                 = {{ db_slave_log_dir }}/mysql-bin.log
+read_only               = 1
+binlog_format           = ROW
+expire_logs_days        = 7
+max_binlog_size         = 100M
+innodb_buffer_pool_size = 512M
+character-set-server    = utf8mb4
+collation-server        = utf8mb4_general_ci

@@ -1,0 +1,160 @@
+---
+- import_playbook: verify_topology.yml
+
+- name: Uji tulis dan replikasi topology
+  hosts: app_proxy
+  become: yes
+  vars:
+    topology_test_app_password: "{{ lookup('env', 'DB_APP_PASSWORD') }}"
+    topology_test_db_root_password: "{{ lookup('env', 'DB_ROOT_PASSWORD') }}"
+    topology_test_app_container_name: "ecommerce-app"
+    topology_test_database_name: "ecommerce"
+    topology_test_table_name: "products"
+    topology_test_slave_host: "{{ groups['slave'][0] }}"
+    topology_test_slave_port: 3306
+    topology_test_product_name: "TEST-TOPOLOGY-{{ lookup('pipe', 'date +%s') }}"
+    topology_test_product_price: 654321
+    topology_test_product_stock: 7
+  tasks:
+    # Uji ini membuat data sementara, jadi password DB dan target slave harus jelas sejak awal.
+    - name: Pastikan password DB dan host slave tersedia
+      assert:
+        that:
+          - topology_test_app_password | default('', true) | length > 0
+          - topology_test_db_root_password | default('', true) | length > 0
+          - groups['slave'] | length > 0
+        fail_msg: "Isi DB_APP_PASSWORD, DB_ROOT_PASSWORD, dan pastikan grup slave tersedia."
+
+    - name: Jalankan uji tulis dan cleanup end-to-end
+      block:
+        - name: Buat produk uji lewat endpoint aplikasi
+          uri:
+            url: "http://127.0.0.1/products"
+            method: POST
+            body_format: json
+            body:
+              name: "{{ topology_test_product_name }}"
+              price: "{{ topology_test_product_price }}"
+              stock: "{{ topology_test_product_stock }}"
+            return_content: yes
+          register: topology_test_create_response
+
+        - name: Pastikan insert produk uji berhasil
+          assert:
+            that:
+              - topology_test_create_response.status == 200
+              - (topology_test_create_response.content | from_json).success
+              - ((topology_test_create_response.content | from_json).insertedId | int) > 0
+            fail_msg: "Insert produk uji lewat aplikasi gagal."
+
+        - name: Simpan ID produk uji untuk verifikasi lanjutan
+          set_fact:
+            topology_test_product_id: "{{ (topology_test_create_response.content | from_json).insertedId | int }}"
+
+        - name: Tunggu data uji masuk ke slave
+          shell: >
+            mariadb -u root -p'{{ topology_test_db_root_password }}' -Nse
+            "SELECT COUNT(*)
+            FROM {{ topology_test_database_name }}.{{ topology_test_table_name }}
+            WHERE id={{ topology_test_product_id }};"
+          args:
+            executable: /bin/bash
+          delegate_to: "{{ groups['slave'][0] }}"
+          register: topology_test_slave_insert_count
+          changed_when: false
+          retries: 15
+          delay: 2
+          until: topology_test_slave_insert_count.stdout | trim == '1'
+
+        - name: Pastikan aplikasi bisa membaca produk uji langsung dari slave
+          shell: >
+            docker exec {{ topology_test_app_container_name }} node -e
+            "const mysql=require('mysql2/promise');
+            (async()=>{
+              const c=await mysql.createConnection({
+                host:'{{ topology_test_slave_host }}',
+                port:{{ topology_test_slave_port }},
+                user:'app_user',
+                password:'{{ topology_test_app_password }}',
+                database:'{{ topology_test_database_name }}'
+              });
+              const [countRows]=await c.execute(
+                'SELECT COUNT(*) AS total_products FROM products WHERE id = ?',
+                [{{ topology_test_product_id }}]
+              );
+              const [statusRows]=await c.query('SELECT @@hostname AS host, @@global.read_only AS global_ro');
+              console.log(JSON.stringify({
+                host: statusRows[0].host,
+                global_ro: statusRows[0].global_ro,
+                total_products: countRows[0].total_products
+              }));
+              await c.end();
+            })().catch(e=>{ console.error(e.message); process.exit(1); })"
+          args:
+            executable: /bin/bash
+          register: topology_test_direct_slave_read
+          changed_when: false
+
+        - name: Pastikan hasil baca slave untuk produk uji valid
+          assert:
+            that:
+              - ((topology_test_direct_slave_read.stdout | from_json).global_ro | string) in ['1', 'ON', 'on']
+              - (topology_test_direct_slave_read.stdout | from_json).total_products | int == 1
+            fail_msg: >-
+              Produk uji belum terbaca dengan benar dari slave.
+              hasil={{ topology_test_direct_slave_read.stdout | trim }}.
+
+        - name: Tampilkan ringkasan hasil uji tulis
+          debug:
+            msg:
+              - "Produk uji berhasil dibuat lewat aplikasi dengan ID {{ topology_test_product_id }}."
+              - "Produk uji berhasil tereplikasi ke slave."
+              - "Produk uji berhasil dibaca langsung dari slave."
+
+      always:
+        - name: Hapus produk uji lewat jalur ProxySQL
+          shell: >
+            docker exec {{ topology_test_app_container_name }} node -e
+            "const mysql=require('mysql2/promise');
+            (async()=>{
+              const c=await mysql.createConnection({
+                host:process.env.DB_HOST,
+                port:Number(process.env.DB_PORT),
+                user:process.env.DB_USER,
+                password:process.env.DB_PASSWORD,
+                database:process.env.DB_NAME
+              });
+              const [result]=await c.execute(
+                'DELETE FROM products WHERE id = ?',
+                [{{ topology_test_product_id }}]
+              );
+              console.log(JSON.stringify({affectedRows: result.affectedRows}));
+              await c.end();
+            })().catch(e=>{ console.error(e.message); process.exit(1); })"
+          args:
+            executable: /bin/bash
+          register: topology_test_delete_response
+          changed_when: false
+          when: topology_test_product_id is defined
+
+        - name: Tunggu cleanup produk uji sampai replika bersih
+          shell: >
+            mariadb -u root -p'{{ topology_test_db_root_password }}' -Nse
+            "SELECT COUNT(*)
+            FROM {{ topology_test_database_name }}.{{ topology_test_table_name }}
+            WHERE id={{ topology_test_product_id }};"
+          args:
+            executable: /bin/bash
+          delegate_to: "{{ groups['slave'][0] }}"
+          register: topology_test_slave_cleanup_count
+          changed_when: false
+          retries: 15
+          delay: 2
+          until: topology_test_slave_cleanup_count.stdout | trim == '0'
+          when: topology_test_product_id is defined
+
+        - name: Tampilkan ringkasan cleanup produk uji
+          debug:
+            msg:
+              - "Produk uji ID {{ topology_test_product_id | default('N/A') }} sudah dibersihkan dari master dan slave."
+          when: topology_test_product_id is defined

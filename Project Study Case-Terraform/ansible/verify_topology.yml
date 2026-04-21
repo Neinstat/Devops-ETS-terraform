@@ -1,0 +1,194 @@
+---
+- name: Verifikasi topology database di slave
+  hosts: slave
+  become: yes
+  vars:
+    verify_db_root_password: "{{ lookup('env', 'DB_ROOT_PASSWORD') }}"
+    verify_database_name: "ecommerce"
+    verify_table_name: "products"
+  tasks:
+    # Validasi ini mencegah playbook verifikasi gagal dengan pesan login DB yang menyesatkan.
+    - name: Pastikan password root database tersedia
+      assert:
+        that:
+          - verify_db_root_password | default('', true) | length > 0
+        fail_msg: "Isi DB_ROOT_PASSWORD sebelum menjalankan verify_topology.yml."
+
+    - name: Ambil status replikasi slave
+      shell: mariadb -u root -p'{{ verify_db_root_password }}' -e "SHOW SLAVE STATUS\\G"
+      args:
+        executable: /bin/bash
+      register: verify_slave_status
+      changed_when: false
+
+    - name: Pastikan replikasi slave sehat
+      assert:
+        that:
+          - "'Slave_IO_Running: Yes' in verify_slave_status.stdout"
+          - "'Slave_SQL_Running: Yes' in verify_slave_status.stdout"
+          - "'Seconds_Behind_Master: 0' in verify_slave_status.stdout"
+        fail_msg: "Replikasi slave belum sehat."
+
+    - name: Ambil status read_only slave
+      shell: mariadb -u root -p'{{ verify_db_root_password }}' -Nse "SELECT @@global.read_only;"
+      args:
+        executable: /bin/bash
+      register: verify_slave_read_only
+      changed_when: false
+
+    - name: Ambil jumlah data aplikasi di slave
+      shell: >
+        mariadb -u root -p'{{ verify_db_root_password }}' -Nse
+        "SELECT COUNT(*) FROM {{ verify_database_name }}.{{ verify_table_name }};"
+      args:
+        executable: /bin/bash
+      register: verify_slave_data_count
+      changed_when: false
+
+    - name: Pastikan slave read-only dan data aplikasi tersedia
+      assert:
+        that:
+          - verify_slave_read_only.stdout | trim in ['1', 'ON', 'on']
+          - verify_slave_data_count.stdout | trim | int > 0
+        fail_msg: >-
+          Slave tidak read-only atau data aplikasi belum tersedia.
+          read_only={{ verify_slave_read_only.stdout | trim }},
+          total_products={{ verify_slave_data_count.stdout | trim }}.
+
+- name: Verifikasi aplikasi dan ProxySQL di VM1
+  hosts: app_proxy
+  become: yes
+  vars:
+    verify_app_password: "{{ lookup('env', 'DB_APP_PASSWORD') }}"
+    verify_app_container_name: "ecommerce-app"
+    verify_proxysql_container_name: "ecommerce-proxysql"
+    verify_slave_host: "10.0.1.21"
+    verify_slave_port: 3306
+    verify_database_name: "ecommerce"
+  tasks:
+    # Password aplikasi dibutuhkan untuk query DB langsung dari container app.
+    - name: Pastikan password aplikasi tersedia
+      assert:
+        that:
+          - verify_app_password | default('', true) | length > 0
+        fail_msg: "Isi DB_APP_PASSWORD sebelum menjalankan verify_topology.yml."
+
+    - name: Pastikan container ProxySQL berjalan
+      shell: docker ps --filter "name={{ verify_proxysql_container_name }}" --format "{{ '{{' }}.Names{{ '}}' }}"
+      args:
+        executable: /bin/bash
+      register: verify_proxysql_container
+      changed_when: false
+
+    - name: Pastikan container aplikasi berjalan
+      shell: docker ps --filter "name={{ verify_app_container_name }}" --format "{{ '{{' }}.Names{{ '}}' }}"
+      args:
+        executable: /bin/bash
+      register: verify_app_container
+      changed_when: false
+
+    - name: Pastikan container aplikasi dan ProxySQL aktif
+      assert:
+        that:
+          - verify_proxysql_container.stdout == verify_proxysql_container_name
+          - verify_app_container.stdout == verify_app_container_name
+        fail_msg: "Container aplikasi atau ProxySQL tidak berjalan."
+
+    - name: Cek endpoint health aplikasi
+      uri:
+        url: "http://127.0.0.1/health"
+        method: GET
+        return_content: yes
+      register: verify_health_response
+
+    - name: Cek endpoint products aplikasi
+      uri:
+        url: "http://127.0.0.1/products"
+        method: GET
+        return_content: yes
+      register: verify_products_response
+
+    - name: Pastikan endpoint aplikasi sehat
+      assert:
+        that:
+          - verify_health_response.status == 200
+          - (verify_health_response.content | from_json).db == 'ok'
+          - verify_products_response.status == 200
+          - (verify_products_response.content | from_json).success
+          - ((verify_products_response.content | from_json).data | length) > 0
+        fail_msg: "Endpoint aplikasi belum sehat atau data produk kosong."
+
+    - name: Cek koneksi langsung dari app ke slave
+      shell: >
+        docker exec {{ verify_app_container_name }} node -e
+        "const mysql=require('mysql2/promise');
+        (async()=>{
+          const c=await mysql.createConnection({
+            host:'{{ verify_slave_host }}',
+            port:{{ verify_slave_port }},
+            user:'app_user',
+            password:'{{ verify_app_password }}',
+            database:'{{ verify_database_name }}'
+          });
+          const [hostRows]=await c.query(\"SELECT @@hostname AS host, @@global.read_only AS global_ro\");
+          const [countRows]=await c.query(\"SELECT COUNT(*) AS total_products FROM products\");
+          console.log(JSON.stringify({
+            host: hostRows[0].host,
+            global_ro: hostRows[0].global_ro,
+            total_products: countRows[0].total_products
+          }));
+          await c.end();
+        })().catch(e=>{ console.error(e.message); process.exit(1); })"
+      args:
+        executable: /bin/bash
+      register: verify_direct_slave_query
+      changed_when: false
+
+    - name: Pastikan app bisa membaca slave secara langsung
+      assert:
+        that:
+          - ((verify_direct_slave_query.stdout | from_json).global_ro | string) in ['1', 'ON', 'on']
+          - (verify_direct_slave_query.stdout | from_json).total_products | int > 0
+        fail_msg: >-
+          Koneksi langsung dari aplikasi ke slave belum sehat.
+          hasil={{ verify_direct_slave_query.stdout | trim }}.
+
+    - name: Cek distribusi query baca lewat ProxySQL
+      shell: >
+        docker exec {{ verify_app_container_name }} node -e
+        "const mysql=require('mysql2/promise');
+        (async()=>{
+          const result={};
+          for (let i=0; i<5; i++) {
+            const c=await mysql.createConnection({
+              host:process.env.DB_HOST,
+              port:Number(process.env.DB_PORT),
+              user:process.env.DB_USER,
+              password:process.env.DB_PASSWORD,
+              database:process.env.DB_NAME
+            });
+            const [rows]=await c.query(\"SELECT @@hostname AS host, @@global.read_only AS global_ro\");
+            const key=String(rows[0].host) + '|ro=' + String(rows[0].global_ro);
+            result[key]=(result[key]||0)+1;
+            await c.end();
+          }
+          console.log(JSON.stringify(result));
+        })().catch(e=>{ console.error(e.message); process.exit(1); })"
+      args:
+        executable: /bin/bash
+      register: verify_proxysql_reads
+      changed_when: false
+
+    - name: Pastikan baca lewat ProxySQL mencapai slave
+      assert:
+        that:
+          - "'vm-slave-db|ro=1' in (verify_proxysql_reads.stdout | from_json)"
+        fail_msg: "Query baca lewat ProxySQL belum mencapai slave."
+
+    - name: Tampilkan ringkasan hasil verifikasi topology
+      debug:
+        msg:
+          - "Slave sehat: Yes/Yes, delay 0."
+          - "Endpoint /health dan /products sehat."
+          - "Koneksi langsung app ke slave sehat."
+          - "Query baca lewat ProxySQL mencapai slave."

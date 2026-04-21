@@ -1,0 +1,6 @@
+---
+- name: Konfigurasi MariaDB slave
+  hosts: slave
+  become: yes
+  roles:
+    - role: db_slave

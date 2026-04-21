@@ -1,0 +1,24 @@
+---
+db_slave_root_password: "{{ lookup('env', 'DB_ROOT_PASSWORD') }}"
+db_slave_repl_password: "{{ lookup('env', 'DB_REPL_PASSWORD') }}"
+db_slave_monitor_password: "{{ lookup('env', 'DB_MONITOR_PASSWORD') }}"
+db_slave_app_password: "{{ lookup('env', 'DB_APP_PASSWORD') }}"
+
+db_slave_master_host: "10.0.1.20"
+db_slave_master_port: 3306
+db_slave_server_id: 2
+db_slave_bind_address: "0.0.0.0"
+db_slave_log_dir: "/var/log/mysql"
+db_slave_config_path: "/etc/mysql/mariadb.conf.d/50-server.cnf"
+# Simpan dump di home user SSH agar task delegate tidak tergantung permission /tmp host.
+db_slave_dump_path: "/home/{{ lookup('env', 'VM_USER') | default('azureuser', true) }}/ecommerce_slave_seed.sql"
+db_slave_database_name: "ecommerce"
+db_slave_app_table_name: "products"
+db_slave_repl_user: "repl_user"
+db_slave_monitor_user: "proxysql_monitor"
+db_slave_app_user: "app_user"
+
+# Izinkan koneksi dari VM1 baik saat MariaDB mengenali IP maupun hostname internal.
+db_slave_allowed_hosts:
+  - "10.0.1.10"
+  - "vm-app-proxy.internal.cloudapp.net"
