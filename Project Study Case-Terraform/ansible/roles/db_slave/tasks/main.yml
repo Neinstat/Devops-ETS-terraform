@@ -104,6 +104,26 @@
   set_fact:
     db_slave_needs_bootstrap: "{{ not db_slave_replication_healthy or not db_slave_schema_ready }}"
 
+- name: Susun opsi SSL untuk CHANGE MASTER TO
+  set_fact:
+    db_slave_change_master_ssl_clause: |-
+      {%- if db_slave_repl_ssl_enabled -%}
+      ,
+      MASTER_SSL=1
+      {%- if db_slave_repl_ssl_ca_path | length > 0 -%}
+      ,
+      MASTER_SSL_CA='{{ db_slave_repl_ssl_ca_path }}'
+      {%- endif -%}
+      {%- if db_slave_repl_ssl_cert_path | length > 0 -%}
+      ,
+      MASTER_SSL_CERT='{{ db_slave_repl_ssl_cert_path }}'
+      {%- endif -%}
+      {%- if db_slave_repl_ssl_key_path | length > 0 -%}
+      ,
+      MASTER_SSL_KEY='{{ db_slave_repl_ssl_key_path }}'
+      {%- endif -%}
+      {%- endif -%}
+
 - name: Buat dump database aplikasi dari master
   command: >
     mysqldump
@@ -200,7 +220,8 @@
     MASTER_PASSWORD='{{ db_slave_repl_password }}',
     MASTER_PORT={{ db_slave_master_port }},
     MASTER_LOG_FILE='{{ db_slave_dump_master_log.stdout.split()[0] }}',
-    MASTER_LOG_POS={{ db_slave_dump_master_log.stdout.split()[1] }};
+    MASTER_LOG_POS={{ db_slave_dump_master_log.stdout.split()[1] }}
+    {{ db_slave_change_master_ssl_clause }};
     START SLAVE;"
   args:
     executable: /bin/bash

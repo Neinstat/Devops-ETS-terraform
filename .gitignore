@@ -1,6 +1,10 @@
 .env
 .DS_Store
 *.pem
+*.csr
+*.srl
 *.log
 progress.md
+selfnote.md
 Project Study Case-Terraform/ansible/inventory.local.ini
+Project Study Case-Terraform/ansible/certs/

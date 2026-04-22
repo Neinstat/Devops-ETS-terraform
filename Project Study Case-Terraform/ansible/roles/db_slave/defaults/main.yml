@@ -18,6 +18,18 @@ db_slave_repl_user: "repl_user"
 db_slave_monitor_user: "proxysql_monitor"
 db_slave_app_user: "app_user"
 
+# Opsi TLS ini dipakai saat slave perlu dipulihkan tanpa menghapus konfigurasi
+# SSL server atau replication channel yang sudah aktif.
+db_slave_tls_enabled: false
+db_slave_tls_ca_path: "/etc/mysql/tls/ca.pem"
+db_slave_tls_cert_path: "/etc/mysql/tls/server-cert.pem"
+db_slave_tls_key_path: "/etc/mysql/tls/server-key.pem"
+db_slave_tls_versions: "TLSv1.2,TLSv1.3"
+db_slave_repl_ssl_enabled: false
+db_slave_repl_ssl_ca_path: ""
+db_slave_repl_ssl_cert_path: ""
+db_slave_repl_ssl_key_path: ""
+
 # Izinkan koneksi dari VM1 baik saat MariaDB mengenali IP maupun hostname internal.
 db_slave_allowed_hosts:
   - "10.0.1.10"

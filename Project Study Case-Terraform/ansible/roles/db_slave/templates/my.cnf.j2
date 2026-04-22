@@ -10,3 +10,9 @@ max_binlog_size         = 100M
 innodb_buffer_pool_size = 512M
 character-set-server    = utf8mb4
 collation-server        = utf8mb4_general_ci
+{% if db_slave_tls_enabled %}
+ssl-ca                  = {{ db_slave_tls_ca_path }}
+ssl-cert                = {{ db_slave_tls_cert_path }}
+ssl-key                 = {{ db_slave_tls_key_path }}
+tls_version             = {{ db_slave_tls_versions }}
+{% endif %}

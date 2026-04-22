@@ -1,0 +1,180 @@
+---
+- import_playbook: verify_topology.yml
+
+- name: Uji failover dan failback query baca lewat ProxySQL
+  hosts: app_proxy
+  become: yes
+  vars:
+    proxysql_failover_db_root_password: "{{ lookup('env', 'DB_ROOT_PASSWORD') }}"
+    proxysql_failover_app_container_name: "ecommerce-app"
+    proxysql_failover_slave_host: "{{ groups['slave'][0] }}"
+    proxysql_failover_expected_slave_key: "vm-slave-db|ro=1"
+    proxysql_failover_expected_master_key: "vm-master-db|ro=0"
+    proxysql_failover_probe_count: 20
+    proxysql_failover_recovery_retries: 20
+    proxysql_failover_recovery_delay: 3
+  tasks:
+    # Test ini sengaja mengganggu service MariaDB slave sementara, jadi jalurnya
+    # dipisah dari verification non-destruktif dan selalu menghidupkan slave lagi.
+    - name: Pastikan password root DB dan grup slave tersedia
+      assert:
+        that:
+          - proxysql_failover_db_root_password | default('', true) | length > 0
+          - groups['slave'] | length > 0
+        fail_msg: "Isi DB_ROOT_PASSWORD dan pastikan grup slave tersedia sebelum menjalankan proxysql_failover_test.yml."
+
+    - name: Jalankan uji failover dan failback
+      block:
+        - name: Ambil distribusi query baca awal lewat ProxySQL
+          shell: >
+            docker exec {{ proxysql_failover_app_container_name }} node -e
+            "const mysql=require('mysql2/promise');
+            (async()=>{
+              const result={};
+              for (let i=0; i<{{ proxysql_failover_probe_count }}; i++) {
+                const c=await mysql.createConnection({
+                  host:process.env.DB_HOST,
+                  port:Number(process.env.DB_PORT),
+                  user:process.env.DB_USER,
+                  password:process.env.DB_PASSWORD,
+                  database:process.env.DB_NAME
+                });
+                const [rows]=await c.query(\"SELECT @@hostname AS host, @@global.read_only AS global_ro\");
+                const key=String(rows[0].host) + '|ro=' + String(rows[0].global_ro);
+                result[key]=(result[key]||0)+1;
+                await c.end();
+              }
+              console.log(JSON.stringify(result));
+            })().catch(e=>{ console.error(e.message); process.exit(1); })"
+          args:
+            executable: /bin/bash
+          register: proxysql_failover_before
+          changed_when: false
+
+        - name: Pastikan kondisi awal read menuju slave
+          assert:
+            that:
+              - proxysql_failover_expected_slave_key in (proxysql_failover_before.stdout | from_json)
+            fail_msg: >-
+              Kondisi awal belum sehat untuk uji failover.
+              distribusi={{ proxysql_failover_before.stdout | trim }}.
+
+        - name: Hentikan service MariaDB di slave untuk simulasi backend read down
+          service:
+            name: mariadb
+            state: stopped
+          delegate_to: "{{ proxysql_failover_slave_host }}"
+
+        - name: Tunggu sebentar agar ProxySQL menandai slave tidak sehat
+          pause:
+            seconds: 12
+
+        - name: Ambil distribusi query baca saat slave down
+          shell: >
+            docker exec {{ proxysql_failover_app_container_name }} node -e
+            "const mysql=require('mysql2/promise');
+            (async()=>{
+              const result={};
+              for (let i=0; i<{{ proxysql_failover_probe_count }}; i++) {
+                const c=await mysql.createConnection({
+                  host:process.env.DB_HOST,
+                  port:Number(process.env.DB_PORT),
+                  user:process.env.DB_USER,
+                  password:process.env.DB_PASSWORD,
+                  database:process.env.DB_NAME
+                });
+                const [rows]=await c.query(\"SELECT @@hostname AS host, @@global.read_only AS global_ro\");
+                const key=String(rows[0].host) + '|ro=' + String(rows[0].global_ro);
+                result[key]=(result[key]||0)+1;
+                await c.end();
+              }
+              console.log(JSON.stringify(result));
+            })().catch(e=>{ console.error(e.message); process.exit(1); })"
+          args:
+            executable: /bin/bash
+          register: proxysql_failover_during
+          changed_when: false
+
+        - name: Ambil log ProxySQL yang relevan untuk bukti failover
+          shell: >
+            docker logs ecommerce-proxysql 2>&1 |
+            egrep '10.0.1.21|Shunning|mysql_real_connect|connect_error|Lost connection|Can.t connect' |
+            tail -n 20
+          args:
+            executable: /bin/bash
+          register: proxysql_failover_logs
+          changed_when: false
+
+        - name: Pastikan query baca fallback ke master saat slave down
+          assert:
+            that:
+              - proxysql_failover_expected_master_key in (proxysql_failover_during.stdout | from_json)
+            fail_msg: >-
+              Query baca belum fallback ke master saat slave down.
+              distribusi={{ proxysql_failover_during.stdout | trim }}.
+
+      always:
+        - name: Nyalakan kembali service MariaDB di slave
+          service:
+            name: mariadb
+            state: started
+          delegate_to: "{{ proxysql_failover_slave_host }}"
+
+        - name: Tunggu replikasi slave pulih kembali
+          shell: mariadb -u root -p'{{ proxysql_failover_db_root_password }}' -e "SHOW SLAVE STATUS\\G"
+          args:
+            executable: /bin/bash
+          delegate_to: "{{ proxysql_failover_slave_host }}"
+          register: proxysql_failover_recovery_status
+          changed_when: false
+          retries: "{{ proxysql_failover_recovery_retries }}"
+          delay: "{{ proxysql_failover_recovery_delay }}"
+          until:
+            - "'Slave_IO_Running: Yes' in proxysql_failover_recovery_status.stdout"
+            - "'Slave_SQL_Running: Yes' in proxysql_failover_recovery_status.stdout"
+
+        - name: Tunggu sebentar agar routing read kembali stabil ke slave
+          pause:
+            seconds: 10
+
+        - name: Ambil distribusi query baca setelah slave pulih
+          shell: >
+            docker exec {{ proxysql_failover_app_container_name }} node -e
+            "const mysql=require('mysql2/promise');
+            (async()=>{
+              const result={};
+              for (let i=0; i<{{ proxysql_failover_probe_count }}; i++) {
+                const c=await mysql.createConnection({
+                  host:process.env.DB_HOST,
+                  port:Number(process.env.DB_PORT),
+                  user:process.env.DB_USER,
+                  password:process.env.DB_PASSWORD,
+                  database:process.env.DB_NAME
+                });
+                const [rows]=await c.query(\"SELECT @@hostname AS host, @@global.read_only AS global_ro\");
+                const key=String(rows[0].host) + '|ro=' + String(rows[0].global_ro);
+                result[key]=(result[key]||0)+1;
+                await c.end();
+              }
+              console.log(JSON.stringify(result));
+            })().catch(e=>{ console.error(e.message); process.exit(1); })"
+          args:
+            executable: /bin/bash
+          register: proxysql_failover_after
+          changed_when: false
+
+        - name: Pastikan query baca kembali ke slave setelah recovery
+          assert:
+            that:
+              - proxysql_failover_expected_slave_key in (proxysql_failover_after.stdout | from_json)
+            fail_msg: >-
+              Query baca belum kembali ke slave setelah recovery.
+              distribusi={{ proxysql_failover_after.stdout | trim }}.
+
+        - name: Tampilkan ringkasan hasil uji failover
+          debug:
+            msg:
+              - "Distribusi awal: {{ proxysql_failover_before.stdout | default('N/A') | trim }}"
+              - "Distribusi saat slave down: {{ proxysql_failover_during.stdout | default('N/A') | trim }}"
+              - "Distribusi setelah recovery: {{ proxysql_failover_after.stdout | default('N/A') | trim }}"
+              - "Log ProxySQL terkait failover: {{ proxysql_failover_logs.stdout_lines | default([]) }}"

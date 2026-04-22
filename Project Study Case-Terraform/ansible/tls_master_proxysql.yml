@@ -116,17 +116,21 @@
         mode: '0644'
         content: |
           [mysqld]
-          server-id = 2
-          bind-address = 0.0.0.0
-          relay_log = /var/log/mysql/mysql-relay-bin.log
-          log_bin = /var/log/mysql/mysql-bin.log
-          binlog_format = ROW
-          read_only = ON
+          server-id               = 2
+          bind-address            = 0.0.0.0
+          relay-log               = /var/log/mysql/relay-bin
+          log_bin                 = /var/log/mysql/mysql-bin.log
+          read_only               = 1
+          binlog_format           = ROW
+          expire_logs_days        = 7
+          max_binlog_size         = 100M
           innodb_buffer_pool_size = 512M
-          ssl-ca   = /etc/mysql/tls/ca.pem
-          ssl-cert = /etc/mysql/tls/server-cert.pem
-          ssl-key  = /etc/mysql/tls/server-key.pem
-          tls_version = TLSv1.2,TLSv1.3
+          character-set-server    = utf8mb4
+          collation-server        = utf8mb4_general_ci
+          ssl-ca                  = /etc/mysql/tls/ca.pem
+          ssl-cert                = /etc/mysql/tls/server-cert.pem
+          ssl-key                 = /etc/mysql/tls/server-key.pem
+          tls_version             = TLSv1.2,TLSv1.3
 
     - name: Restart MariaDB di Slave
       service: name=mariadb state=restarted
@@ -211,3 +215,81 @@
     - name: Deploy Ulang App Database Integration
       include_role:
         name: app_runtime_integration
+
+- name: 4. Pulihkan replikasi slave bila restart TLS memutus kanal replication
+  hosts: slave
+  become: yes
+  vars:
+    tls_slave_root_password: "{{ lookup('env', 'DB_ROOT_PASSWORD') }}"
+  tasks:
+    # Restart service MariaDB setelah perubahan TLS bisa meninggalkan state relay
+    # yang tidak valid. Guard ini otomatis memulihkan slave sebelum verifikasi.
+    - name: Pastikan password root database tersedia untuk recovery TLS
+      assert:
+        that:
+          - tls_slave_root_password | default('', true) | length > 0
+        fail_msg: "Isi DB_ROOT_PASSWORD sebelum menjalankan tls_master_proxysql.yml."
+
+    - name: Ambil status replikasi slave setelah deploy TLS
+      shell: mariadb -u root -p'{{ tls_slave_root_password }}' -e "SHOW SLAVE STATUS\\G"
+      args:
+        executable: /bin/bash
+      register: tls_slave_status_after_tls
+      changed_when: false
+      failed_when: false
+
+    - name: Tentukan apakah slave perlu recovery setelah deploy TLS
+      set_fact:
+        tls_slave_replication_healthy: >-
+          {{ 'Slave_IO_Running: Yes' in tls_slave_status_after_tls.stdout
+             and 'Slave_SQL_Running: Yes' in tls_slave_status_after_tls.stdout }}
+
+    - name: Tentukan apakah replication channel slave sudah memakai SSL
+      set_fact:
+        tls_slave_replication_ssl_enabled: "{{ 'Master_SSL_Allowed: Yes' in tls_slave_status_after_tls.stdout }}"
+
+    - name: Aktifkan SSL pada replication channel slave tanpa reseed ulang
+      shell: >
+        mariadb -u root -p'{{ tls_slave_root_password }}' -e "STOP SLAVE;
+        CHANGE MASTER TO
+        MASTER_SSL=1,
+        MASTER_SSL_CA='/etc/mysql/tls/ca.pem';
+        START SLAVE;"
+      args:
+        executable: /bin/bash
+      when:
+        - tls_slave_replication_healthy
+        - not tls_slave_replication_ssl_enabled
+
+    - name: Pulihkan slave jika replikasi tidak sehat setelah deploy TLS
+      include_role:
+        name: db_slave
+      vars:
+        db_slave_tls_enabled: true
+        db_slave_tls_ca_path: "/etc/mysql/tls/ca.pem"
+        db_slave_tls_cert_path: "/etc/mysql/tls/server-cert.pem"
+        db_slave_tls_key_path: "/etc/mysql/tls/server-key.pem"
+        db_slave_tls_versions: "TLSv1.2,TLSv1.3"
+        db_slave_repl_ssl_enabled: true
+        db_slave_repl_ssl_ca_path: "/etc/mysql/tls/ca.pem"
+      when: not tls_slave_replication_healthy
+
+    - name: Ambil status replikasi slave final sesudah recovery TLS
+      shell: mariadb -u root -p'{{ tls_slave_root_password }}' -e "SHOW SLAVE STATUS\\G"
+      args:
+        executable: /bin/bash
+      register: tls_slave_status_final
+      changed_when: false
+
+    - name: Pastikan replikasi slave sehat setelah deploy TLS
+      assert:
+        that:
+          - "'Slave_IO_Running: Yes' in tls_slave_status_final.stdout"
+          - "'Slave_SQL_Running: Yes' in tls_slave_status_final.stdout"
+        fail_msg: "Replikasi slave belum sehat setelah deploy TLS."
+
+    - name: Pastikan replication channel slave sudah memakai SSL
+      assert:
+        that:
+          - "'Master_SSL_Allowed: Yes' in tls_slave_status_final.stdout"
+        fail_msg: "Replication channel slave belum dikonfigurasi untuk SSL setelah deploy TLS."

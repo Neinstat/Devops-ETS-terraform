@@ -91,6 +91,20 @@ Playbook ini akan:
 - memastikan aplikasi bisa membaca data uji langsung dari slave
 - membersihkan lagi data uji dari master dan slave setelah test selesai
 
+Runner satu command untuk seluruh tes utama:
+
+```bash
+bash ./topology_test_runner.sh
+```
+
+Script ini menjalankan:
+- ping Ansible ke VM1 dan VM3
+- `verify_topology.yml`
+- `topology_test.yml`
+- `curl /health`
+- `curl /products`
+- cek distribusi query baca lewat ProxySQL
+
 Validasi konektivitas ke VM1 sebelum menjalankan playbook:
 
 ```bash
