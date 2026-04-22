@@ -26,6 +26,15 @@
         chdir: "{{ playbook_dir }}/certs"
         creates: "{{ playbook_dir }}/certs/master-cert.pem"
 
+    - name: Generate Certs untuk Slave DB
+      shell: |
+        openssl genrsa -out slave-key.pem 2048
+        openssl req -new -key slave-key.pem -out slave.csr -subj "/C=ID/ST=Jawa Timur/O=DevOps/CN=vm-slave-db"
+        openssl x509 -req -in slave.csr -CA ca.pem -CAkey ca-key.pem -CAcreateserial -out slave-cert.pem -days 3650
+      args:
+        chdir: "{{ playbook_dir }}/certs"
+        creates: "{{ playbook_dir }}/certs/slave-cert.pem"
+
     - name: Generate Certs Frontend untuk ProxySQL (App <-> Proxy)
       shell: |
         openssl genrsa -out proxysql-key.pem 2048
@@ -80,6 +89,48 @@
     - name: Restart MariaDB di Master
       service: name=mariadb state=restarted
 
+- name: 2b. Implementasi TLS di Database Slave
+  hosts: slave
+  become: yes
+  tasks:
+    - name: Buat direktori TLS di Slave
+      file: path=/etc/mysql/tls state=directory owner=mysql group=mysql mode="0750"
+
+    - name: Copy sertifikat TLS ke Slave
+      copy:
+        src: "{{ playbook_dir }}/certs/{{ item.src }}"
+        dest: "/etc/mysql/tls/{{ item.dest }}"
+        owner: mysql
+        group: mysql
+        mode: "{{ item.mode }}"
+      loop:
+        - { src: 'ca.pem',        dest: 'ca.pem',        mode: '0644' }
+        - { src: 'slave-cert.pem', dest: 'server-cert.pem', mode: '0644' }
+        - { src: 'slave-key.pem',  dest: 'server-key.pem',  mode: '0600' }
+
+    - name: Timpa konfigurasi MariaDB Slave
+      copy:
+        dest: /etc/mysql/mariadb.conf.d/50-server.cnf
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          [mysqld]
+          server-id = 2
+          bind-address = 0.0.0.0
+          relay_log = /var/log/mysql/mysql-relay-bin.log
+          log_bin = /var/log/mysql/mysql-bin.log
+          binlog_format = ROW
+          read_only = ON
+          innodb_buffer_pool_size = 512M
+          ssl-ca   = /etc/mysql/tls/ca.pem
+          ssl-cert = /etc/mysql/tls/server-cert.pem
+          ssl-key  = /etc/mysql/tls/server-key.pem
+          tls_version = TLSv1.2,TLSv1.3
+
+    - name: Restart MariaDB di Slave
+      service: name=mariadb state=restarted
+
 
 - name: 3. Implementasi TLS di App & ProxySQL (VM1)
   hosts: app_proxy
@@ -112,7 +163,8 @@
           (
               { address="10.0.1.20", port=3306, hostgroup=0, max_connections=100, use_ssl=1 },
               { address="10.0.1.20", port=3306, hostgroup=1, max_connections=100, weight=1, use_ssl=1 },
-              { address="10.0.1.21", port=3306, hostgroup=1, max_connections=100, weight=1000 }
+              { address="10.0.1.21", port=3306, hostgroup=1, max_connections=100, weight=1000, use_ssl=1 }
+              
           )
           mysql_users=
           (
